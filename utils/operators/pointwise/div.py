@@ -1,6 +1,6 @@
 # FactorMachine/utils/operators/pointwise/div.py
 description = {
-    "description": "点态除法算子，逐元素计算 x / y，支持标量或数组间的广播运算",
+    "description": "除法算子，逐元素计算 x / y，支持标量或数组间的广播运算（点算子）",
     "args": {
         "x": "被除数，可以是标量、序列或数组",
         "y": "除数，可以是标量、序列或数组"
@@ -13,5 +13,5 @@ def div(x, y):
     """
     点态除法算子
     """
-    return x / y
+    return x / (y + 1e-8)  # 防止除零错误
 

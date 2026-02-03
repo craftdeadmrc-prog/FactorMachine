@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "volume",
+    "volume_ma_20"
+  ],
+  "description": {
+    "中文名": "成交量比率",
+    "英文名": "Volume Ratio",
+    "变量名": "volume_ratio"
+  },
+  "info": {
+    "介绍": "成交量相对20日平均成交量的倍数。",
+    "计算公式": "div(volume, volume_ma_20)"
+  }
+}

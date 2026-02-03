@@ -1,6 +1,6 @@
 # FactorMachine/utils/operators/pointwise/mul.py
 description = {
-    "description": "点态乘法算子，逐元素计算 x * y",
+    "description": "乘法算子，逐元素计算 x * y（点算子）",
     "args": {
         "x": "左操作数，可以是标量、序列或数组",
         "y": "右操作数，可以是标量、序列或数组"

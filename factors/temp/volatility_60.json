@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "return_ratio"
+  ],
+  "description": {
+    "中文名": "60日波动率",
+    "英文名": "60-Day Volatility",
+    "变量名": "volatility_60"
+  },
+  "info": {
+    "介绍": "过去60个交易日日收益率的标准差。",
+    "计算公式": "rolling_std(return_ratio, 60)"
+  }
+}

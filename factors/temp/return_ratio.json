@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "close"
+  ],
+  "description": {
+    "中文名": "日收益率",
+    "英文名": "Daily Return Ratio",
+    "变量名": "return_ratio"
+  },
+  "info": {
+    "介绍": "以昨日收盘价为基准的日度对数或算术收益率（此处按算术形式）。",
+    "计算公式": "div(sub(close, shift(close, 1)), shift(close, 1))"
+  }
+}

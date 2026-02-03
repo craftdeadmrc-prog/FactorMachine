@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "close",
+    "ma_20"
+  ],
+  "description": {
+    "中文名": "布林带宽度",
+    "英文名": "Bollinger Width",
+    "变量名": "bollinger_width"
+  },
+  "info": {
+    "介绍": "布林通道宽度相对于中轨的比例，反映近期价格波动范围的相对大小。",
+    "计算公式": "div(mul(2, rolling_std(close, 20)), ma_20)"
+  }
+}

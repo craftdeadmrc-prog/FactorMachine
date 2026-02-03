@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "volume",
+    "turnover_ratio"
+  ],
+  "description": {
+    "中文名": "股票流通量",
+    "英文名": "Outstanding Share",
+    "变量名": "outstanding_share"
+  },
+  "info": {
+    "介绍": "通过成交量与换手率反推的流通股本估计值。",
+    "计算公式": "div(volume, turnover_ratio)"
+  }
+}

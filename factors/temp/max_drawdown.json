@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "close"
+  ],
+  "description": {
+    "中文名": "最大回撤",
+    "英文名": "Maximum Drawdown",
+    "变量名": "max_drawdown"
+  },
+  "info": {
+    "介绍": "以收盘价为基础计算的逐日最大回撤。",
+    "计算公式": "max(div(sub(cummax(close), close), cummax(close)))"
+  }
+}

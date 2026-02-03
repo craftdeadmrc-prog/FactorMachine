@@ -1,0 +1,16 @@
+{
+  "dependencies": [
+    "close",
+    "high",
+    "low"
+  ],
+  "description": {
+    "中文名": "20日收盘价位置",
+    "英文名": "20-Day Close Position",
+    "变量名": "close_position_20"
+  },
+  "info": {
+    "介绍": "收盘价在过去20日最高价和最低价区间中的相对位置。",
+    "计算公式": "div(sub(close, rolling_min(low, 20)), sub(rolling_max(high, 20), rolling_min(low, 20)))"
+  }
+}

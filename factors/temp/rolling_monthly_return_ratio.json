@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "close"
+  ],
+  "description": {
+    "中文名": "滚动月回报率",
+    "英文名": "Rolling Monthly Return Ratio",
+    "变量名": "rolling_monthly_return_ratio"
+  },
+  "info": {
+    "介绍": "按过去一个月价格变动计算的滚动收益率。",
+    "计算公式": "div(sub(close, shift(close, 21)), shift(close, 21))"
+  }
+}

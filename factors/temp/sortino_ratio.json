@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "annual_return_ratio",
+    "annual_downside_volatility"
+  ],
+  "description": {
+    "中文名": "索提诺比率",
+    "英文名": "Sortino Ratio",
+    "变量名": "sortino_ratio"
+  },
+  "info": {
+    "介绍": "单位下行风险所获得的超额收益。",
+    "计算公式": "div(annual_return_ratio, annual_downside_volatility)"
+  }
+}

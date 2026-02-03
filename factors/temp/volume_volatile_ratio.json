@@ -1,0 +1,16 @@
+{
+  "dependencies": [
+    "volume",
+    "volume_ma_20",
+    "volatility_20"
+  ],
+  "description": {
+    "中文名": "量价波动率比",
+    "英文名": "Volume Volatility Ratio",
+    "变量名": "volume_volatile_ratio"
+  },
+  "info": {
+    "介绍": "成交量相对均值的放大倍数与价格波动率的乘积，用于刻画高波动高成交或低波动低成交等状态。",
+    "计算公式": "mul(div(volume, volume_ma_20), volatility_20)"
+  }
+}

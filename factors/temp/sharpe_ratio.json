@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "annual_return_ratio",
+    "annual_volatility_ratio"
+  ],
+  "description": {
+    "中文名": "夏普比率",
+    "英文名": "Sharpe Ratio",
+    "变量名": "sharpe_ratio"
+  },
+  "info": {
+    "介绍": "单位总波动所获得的超额收益。",
+    "计算公式": "div(annual_return_ratio, 2)"
+  }
+}

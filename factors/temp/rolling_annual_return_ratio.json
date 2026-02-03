@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "close"
+  ],
+  "description": {
+    "中文名": "滚动年回报率",
+    "英文名": "Rolling Annual Return Ratio",
+    "变量名": "rolling_annual_return_ratio"
+  },
+  "info": {
+    "介绍": "按过去一年价格变动计算的滚动年化收益率。",
+    "计算公式": "div(sub(close, shift(close, 252)), shift(close, 252))"
+  }
+}

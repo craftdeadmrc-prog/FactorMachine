@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "annual_return_ratio",
+    "max_drawdown"
+  ],
+  "description": {
+    "中文名": "卡玛比率",
+    "英文名": "Calmar Ratio",
+    "变量名": "calmar_ratio"
+  },
+  "info": {
+    "介绍": "卡玛比率，通常定义为年化收益率除以绝对值最大回撤。",
+    "计算公式": "div(annual_return_ratio, max_drawdown)"
+  }
+}

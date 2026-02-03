@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "close",
+    "ma_20"
+  ],
+  "description": {
+    "中文名": "20日收盘价离差",
+    "英文名": "20-Day Close Deviation",
+    "变量名": "close_deviation_20"
+  },
+  "info": {
+    "介绍": "收盘价相对20日均线的偏离程度。",
+    "计算公式": "div(sub(close, ma_20), ma_20)"
+  }
+}

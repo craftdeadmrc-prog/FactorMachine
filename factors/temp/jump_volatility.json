@@ -1,0 +1,16 @@
+{
+  "dependencies": [
+    "high",
+    "low",
+    "close"
+  ],
+  "description": {
+    "中文名": "跳跃波动率",
+    "英文名": "Jump Volatility",
+    "变量名": "jump_volatility"
+  },
+  "info": {
+    "介绍": "利用日内最高价、最低价与收盘价变动构造的近似跳跃波动成分，用于区分连续与不连续波动。",
+    "计算公式": "sub(mul(0.5, pow(sub(high, low), 2)), sub(pow(sub(close, shift(close, 1)), 2), pow(div(sub(high, low), 2), 2)))"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "close"
+  ],
+  "description": {
+    "中文名": "60日动量",
+    "英文名": "60-Day Momentum",
+    "变量名": "momentum_60"
+  },
+  "info": {
+    "介绍": "当前收盘价相对60日之前收盘价的收益率。",
+    "计算公式": "div(sub(close, shift(close, 60)), shift(close, 60))"
+  }
+}

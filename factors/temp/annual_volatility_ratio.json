@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "return_ratio"
+  ],
+  "description": {
+    "中文名": "年化波动率",
+    "英文名": "Annual Volatility Ratio",
+    "变量名": "annual_volatility_ratio"
+  },
+  "info": {
+    "介绍": "基于日度收益率标准差按交易日数进行年化。",
+    "计算公式": "mul(std(return_ratio), pow(252, 0.5))"
+  }
+}

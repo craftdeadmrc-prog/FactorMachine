@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "open",
+    "close"
+  ],
+  "description": {
+    "中文名": "当日涨幅",
+    "英文名": "Daily Change Ratio",
+    "变量名": "change_ratio"
+  },
+  "info": {
+    "介绍": "当日从开盘价到收盘价的收益率。",
+    "计算公式": "div(sub(close, open), open)"
+  }
+}

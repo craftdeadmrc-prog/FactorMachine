@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "close"
+  ],
+  "description": {
+    "中文名": "5/20日动量比",
+    "英文名": "Momentum 5/20 Ratio",
+    "变量名": "momentum_5_20_ratio"
+  },
+  "info": {
+    "介绍": "短期与中期动量收益率之比，用于刻画趋势强弱和加速/减速特征。",
+    "计算公式": "div(momentum_5, momentum_20)"
+  }
+}

@@ -1,6 +1,6 @@
 # FactorMachine/utils/operators/pointwise/sub.py
 description = {
-    "description": "点态减法算子，逐元素计算 x - y",
+    "description": "减法算子，逐元素计算 x - y（点算子）",
     "args": {
         "x": "被减数，可以是标量、序列或数组",
         "y": "减数，可以是标量、序列或数组"

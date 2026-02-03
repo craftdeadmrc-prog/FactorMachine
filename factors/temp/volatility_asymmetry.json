@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "log_return_ratio"
+  ],
+  "description": {
+    "中文名": "波动率不对称性",
+    "英文名": "Volatility Asymmetry",
+    "变量名": "volatility_asymmetry"
+  },
+  "info": {
+    "介绍": "衡量上涨和下跌波动率的差异，用于刻画收益分布左右尾部的波动不对称特征。",
+    "计算公式": "div(sub(rolling_std(where(log_return_ratio > 0, log_return_ratio, 0), 20), rolling_std(where(log_return_ratio < 0, log_return_ratio, 0), 20)), add(rolling_std(where(log_return_ratio > 0, log_return_ratio, 0), 20), rolling_std(where(log_return_ratio < 0, log_return_ratio, 0), 20)))"
+  }
+}

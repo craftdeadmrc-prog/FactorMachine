@@ -1,6 +1,6 @@
 # FactorMachine/utils/operators/pointwise/pow.py
 description = {
-    "description": "点态幂运算算子，逐元素计算 x 的 y 次方",
+    "description": "幂运算算子，逐元素计算 x 的 y 次方（点算子）",
     "args": {
         "x": "底数，可以是标量、序列或数组",
         "y": "指数，可以是标量、序列或数组"

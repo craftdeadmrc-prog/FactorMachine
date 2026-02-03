@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "close"
+  ],
+  "description": {
+    "中文名": "对数收益率",
+    "英文名": "Log Return Ratio",
+    "变量名": "log_return_ratio"
+  },
+  "info": {
+    "介绍": "基于对数变换的日收益率，更适用于时间序列分析和波动率建模。",
+    "计算公式": "sub(log(close), log(shift(close, 1)))"
+  }
+}

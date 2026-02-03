@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "close"
+  ],
+  "description": {
+    "中文名": "5日动量",
+    "英文名": "5-Day Momentum",
+    "变量名": "momentum_5"
+  },
+  "info": {
+    "介绍": "当前收盘价相对5日之前收盘价的收益率。",
+    "计算公式": "div(sub(close, shift(close, 5)), shift(close, 5))"
+  }
+}

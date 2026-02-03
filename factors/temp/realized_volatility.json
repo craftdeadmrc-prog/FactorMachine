@@ -1,0 +1,14 @@
+    {
+  "dependencies": [
+    "log_return_ratio"
+  ],
+  "description": {
+    "中文名": "已实现波动率",
+    "英文名": "Realized Volatility",
+    "变量名": "realized_volatility"
+  },
+  "info": {
+    "介绍": "基于对数收益率平方和计算的短期已实现波动率，并按年度进行年化。",
+    "计算公式": "mul(pow(rolling_sum(pow(log_return_ratio, 2), 5), 0.5), pow(252, 0.5))"
+  }
+}
