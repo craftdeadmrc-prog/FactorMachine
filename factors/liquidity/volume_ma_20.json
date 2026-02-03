@@ -1,0 +1,13 @@
+{
+  "dependencies": [ "volume"],
+  "description": {
+    "中文名": "20日成交量移动平均",
+    "英文名": "20-Day Volume Moving Average",
+    "变量名": "volume_ma_20"
+  },
+  "info": {
+    "介绍": "20日成交量移动平均，计算过去20个交易日成交量的平均值，反映股票的交易活跃度",
+    "日期": "",
+    "计算公式": "rolling_mean(volume,20)"
+  }
+}

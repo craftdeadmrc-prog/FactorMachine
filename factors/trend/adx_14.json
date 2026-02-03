@@ -1,0 +1,13 @@
+{
+  "dependencies": ["high", "low", "close"],
+  "description": {
+    "中文名": "14日平均趋向指数",
+    "英文名": "14-Day Average Directional Index",
+    "变量名": "adx_14"
+  },
+  "info": {
+    "介绍": "14日平均趋向指数(ADX)，衡量趋势的强度而不考虑方向，由威尔斯·怀尔德于1978年提出",
+    "日期": "1978",
+    "计算公式": "adx(high,low,close,14)"
+  }
+}

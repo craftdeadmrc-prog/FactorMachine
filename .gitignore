@@ -1,0 +1,6 @@
+all_factors.txt
+output.py
+test_loader.py
+*__pycache__*
+*.parquet
+spider/deprecated/*

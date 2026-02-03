@@ -1,0 +1,13 @@
+{
+  "dependencies": ["close"],
+  "description": {
+    "中文名": "12日收盘移动平均线",
+    "英文名": "12-Day Close Moving Average",
+    "变量名": "ma_12"
+  },
+  "info": {
+    "介绍": "12日简单移动平均线",
+    "日期": "",
+    "计算公式": "rolling_mean(close, 12)"
+  }
+}

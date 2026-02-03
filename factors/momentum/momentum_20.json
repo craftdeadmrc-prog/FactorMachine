@@ -1,0 +1,13 @@
+{
+  "dependencies": [ "close"],
+  "description": {
+    "中文名": "20日动量",
+    "英文名": "20-Day Momentum",
+    "变量名": "momentum_20"
+  },
+  "info": {
+    "介绍": "20日动量，计算当前价格相对于20日前价格的变化率，反映短期价格趋势",
+    "日期": "",
+    "计算公式": "div(sub(close,shift(close,20)),shift(close,20))"
+  }
+}

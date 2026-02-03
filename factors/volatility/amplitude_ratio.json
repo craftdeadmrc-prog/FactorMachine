@@ -1,0 +1,13 @@
+{
+  "dependencies": ["high", "low", "open"],
+  "description": {
+    "中文名": "日内振幅",
+    "英文名": "Daily Amplitude Ratio",
+    "变量名": "amplitude_ratio"
+  },
+  "info": {
+    "介绍": "日内振幅，反映股票当日的价格波动幅度",
+    "日期": "1952",
+    "计算公式": "div(sub(high,low),open)"
+  }
+}

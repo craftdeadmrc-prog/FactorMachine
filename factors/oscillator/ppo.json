@@ -1,0 +1,13 @@
+{
+  "dependencies": [ "ma_12", "ma_26"],
+  "description": {
+    "中文名": "价格百分比振荡指标",
+    "英文名": "Percentage Price Oscillator",
+    "变量名": "ppo"
+  },
+  "info": {
+    "介绍": "价格百分比振荡指标(PPO)，计算短期和长期移动平均线的百分比差异，反映价格动量变化",
+    "日期": "",
+    "计算公式": "div(sub(ma_12,ma_26),ma_26)"
+  }
+}

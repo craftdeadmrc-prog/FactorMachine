@@ -1,0 +1,13 @@
+{
+  "dependencies": ["close", "open"],
+  "description": {
+    "中文名": "波动率因子",
+    "英文名": "Volatility Factor",
+    "变量名": "volatility"
+  },
+  "info": {
+    "介绍": "简单的价格波动率因子",
+    "日期": "",
+    "计算公式": "div(sub(close, open), open)"
+  }
+}
