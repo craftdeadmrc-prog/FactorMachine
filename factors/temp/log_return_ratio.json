@@ -1,7 +1,4 @@
 {
-  "dependencies": [
-    "close"
-  ],
   "description": {
     "中文名": "对数收益率",
     "英文名": "Log Return Ratio",

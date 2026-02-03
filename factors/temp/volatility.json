@@ -1,5 +1,4 @@
 {
-  "dependencies": ["close", "open"],
   "description": {
     "中文名": "波动率因子",
     "英文名": "Volatility Factor",

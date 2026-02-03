@@ -1,5 +1,4 @@
 {
-  "dependencies": [ "volume"],
   "description": {
     "中文名": "20日成交量移动平均",
     "英文名": "20-Day Volume Moving Average",

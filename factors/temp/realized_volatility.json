@@ -1,7 +1,4 @@
     {
-  "dependencies": [
-    "log_return_ratio"
-  ],
   "description": {
     "中文名": "已实现波动率",
     "英文名": "Realized Volatility",

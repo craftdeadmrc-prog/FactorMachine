@@ -56,6 +56,9 @@ class FactorLoader:
         self._batches: Optional[List[List[str]]] = None
         self._forward_dep: Optional[Dict[str, Set[str]]] = None
 
+        # 市场数据已有列（用于在依赖与所需列分析中自动跳过）
+        self._market_columns: Set[str] = set()
+
     # ------------------------------------------------------------------
     # 因子索引与依赖分析
     # ------------------------------------------------------------------
@@ -85,7 +88,6 @@ class FactorLoader:
         读取每个 JSON 因子文件，构建因子元信息：
         - name: description.变量名 或 文件名
         - category: 来自路径一级目录
-        - dependencies: 显式依赖列（不含 code/date）
         - description/info: 说明与公式
         """
         deps: Dict[str, dict] = {}
@@ -100,8 +102,11 @@ class FactorLoader:
                     continue
 
                 p = Path(root) / file
-                with p.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
+                try:
+                    with p.open("r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    print(f"因子文件解析失败: {p}")
 
                 name = data.get("description", {}).get("变量名", p.stem)
                 if not name:
@@ -112,8 +117,7 @@ class FactorLoader:
 
                 deps[name] = {
                     "category": category,
-                    "dependencies": data.get("dependencies", []),
-                    "description": data.get("description", {}),
+                                      "description": data.get("description", {}),
                     "info": data.get("info", {}),
                 }
 
@@ -122,10 +126,10 @@ class FactorLoader:
     def _factor_columns(self, name: str) -> Set[str]:
         """
         计算单个因子实际需要的列集合（不含 code/date）：
-        = JSON.dependencies ∪ AST(计算公式) 中的变量名 - 算子名
+        = JSON.dependencies ∪ AST(计算公式) 中的变量名 - 算子名 - 市场数据已有列
         """
         info = self.factor_deps.get(name, {})
-        columns = set(info.get("dependencies", []))
+        columns = set([])
 
         expr = info.get("info", {}).get("计算公式", "")
         if not expr:
@@ -142,6 +146,7 @@ class FactorLoader:
 
         # 移除算子名
         operator_names = set(self.operators.keys())
+        # 再移除市场数据表中已有的列（这些列不需要作为“需要计算的因子”参与）
         return columns - operator_names
 
     # ------------------------------------------------------------------
@@ -153,10 +158,14 @@ class FactorLoader:
         构建因子依赖图并计算批次（Kahn 拓扑）：
         - forward_dep: factor -> {它依赖的因子}
         - existing_factors: 已有结果文件视为已完成
-        - 入度 in_degree 表示“该因子有多少前驱因子”
+        - 入度 in_degree 表示"该因子有多少前驱因子"
         """
         if self._dependency_graph is not None and self._batches is not None:
             return self._dependency_graph, self._batches
+
+        # 确保已加载市场数据列，用于在依赖中跳过这些“内置因子”
+        self.load_parquet()
+        self._market_columns = set(self.parquet_df.columns)
 
         # 正向依赖：factor -> set(依赖的因子名)
         forward_dep: Dict[str, Set[str]] = {name: set() for name in self.factor_deps}
@@ -168,8 +177,10 @@ class FactorLoader:
             try:
                 tree = ast.parse(expr, mode="eval")
                 for node in ast.walk(tree):
-                    if isinstance(node, ast.Name) and node.id in self.factor_deps:
-                        forward_dep[name].add(node.id)
+                    if isinstance(node, ast.Name):
+                        # 只保留“因子名”依赖，且自动跳过市场数据表中已有的列
+                        if node.id in self.factor_deps and node.id not in self._market_columns:
+                            forward_dep[name].add(node.id)
             except Exception:
                 pass
 
@@ -255,6 +266,8 @@ class FactorLoader:
             if self.parquet_df is None or self.parquet_df.empty:
                 raise ValueError(f"市场数据 {self.market_type} 加载失败或为空")
             self.working_df = self.parquet_df.copy()
+            # 同时更新市场数据已有列集合
+            self._market_columns = set(self.parquet_df.columns)
             self._load_all_existing_factors()
 
     def _load_all_existing_factors(self) -> None:

@@ -1,8 +1,4 @@
 {
-  "dependencies": [
-    "close",
-    "ma_20"
-  ],
   "description": {
     "中文名": "20日收盘价离差",
     "英文名": "20-Day Close Deviation",

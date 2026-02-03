@@ -11,12 +11,12 @@ from .config import DATA_PATH
 os.makedirs(DATA_PATH, exist_ok=True)
 
 
-def _get_config_path(table_name: str) -> str:
-    return os.path.join(DATA_PATH, f"{table_name}_config.json")
+def _get_config_path(table_name: str, path=DATA_PATH) -> str:
+    return os.path.join(path, f"{table_name}_config.json")
 
 
-def load_table_config(table_name: str) -> dict:
-    path = _get_config_path(table_name)
+def load_table_config(table_name: str, path=DATA_PATH) -> dict:
+    path = _get_config_path(table_name, path)
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -26,17 +26,17 @@ def load_table_config(table_name: str) -> dict:
     return {}
 
 
-def save_table_config(table_name: str, config: dict):
-    path = _get_config_path(table_name)
+def save_table_config(table_name: str, config: dict, path=DATA_PATH):
+    path = _get_config_path(table_name, path)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False)
 
 
-def get_last_update_date(table_name: str):
+def get_last_update_date(table_name: str, path=DATA_PATH):
     """
     返回 YYYYMMDD 或 None
     """
-    config = load_table_config(table_name)
+    config = load_table_config(table_name, path)
     return config.get("last_update")
 
 def load_dataframe(table_name: str, path=DATA_PATH) -> pd.DataFrame:
@@ -57,7 +57,7 @@ def save_dataframe(df: pd.DataFrame, table_name: str, path=DATA_PATH):
     if df is None or df.empty:
         return
 
-    config = load_table_config(table_name)
+    config = load_table_config(table_name, path)
     table_conf = config.get(table_name, {})
     col_types = {}
 
@@ -84,7 +84,7 @@ def save_dataframe(df: pd.DataFrame, table_name: str, path=DATA_PATH):
 
     config["last_update"] = normalize_date_str(date.today().isoformat())
 
-    save_table_config(table_name, config)
+    save_table_config(table_name, config, path)
 
     file_path = os.path.join(path, f"{table_name}.parquet")
     df.to_parquet(file_path, index=False)

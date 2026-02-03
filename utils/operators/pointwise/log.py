@@ -1,16 +1,16 @@
-# utils/operators/pointwise/neg.py
+# utils/operators/pointwise/log.py
 description = {
-    "description": "对输入序列取负值（点算子）",
+    "description": "计算输入序列的自然对数（点算子）",
     "args": {
-        "x": "输入序列"
+        "x": "输入序列，必须为正值"
     },
-    "return": "取负后的序列",
-    "example": "neg(close)"
+    "return": "自然对数序列",
+    "example": "log(close)"
 }
 
-def neg(x):
+def log(x):
     """
-    取负算子
+    自然对数算子
     """
     import numpy as np
-    return -x
+    return np.log(x+1e-8)

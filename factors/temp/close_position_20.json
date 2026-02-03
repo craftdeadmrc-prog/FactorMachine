@@ -1,9 +1,4 @@
 {
-  "dependencies": [
-    "close",
-    "high",
-    "low"
-  ],
   "description": {
     "中文名": "20日收盘价位置",
     "英文名": "20-Day Close Position",

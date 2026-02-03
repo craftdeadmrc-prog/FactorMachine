@@ -1,8 +1,4 @@
 {
-  "dependencies": [
-    "volume",
-    "turnover_ratio"
-  ],
   "description": {
     "中文名": "股票流通量",
     "英文名": "Outstanding Share",

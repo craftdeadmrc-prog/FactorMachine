@@ -1,7 +1,4 @@
 {
-  "dependencies": [
-    "return_ratio"
-  ],
   "description": {
     "中文名": "年化收益率",
     "英文名": "Annual Return Ratio",

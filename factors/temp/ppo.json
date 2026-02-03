@@ -1,5 +1,4 @@
 {
-  "dependencies": [ "ma_12", "ma_26"],
   "description": {
     "中文名": "价格百分比振荡指标",
     "英文名": "Percentage Price Oscillator",

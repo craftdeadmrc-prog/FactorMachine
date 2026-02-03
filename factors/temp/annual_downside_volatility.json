@@ -1,7 +1,4 @@
 {
-  "dependencies": [
-    "return_ratio"
-  ],
   "description": {
     "中文名": "年化下行波动率",
     "英文名": "Annual Downside Volatility",
@@ -9,6 +6,6 @@
   },
   "info": {
     "介绍": "基于收益序列的下行部分计算标准差，并按年度频率进行年化。",
-    "计算公式": "mul(std(where(sub(return_ratio, 2) < 0, sub(return_ratio, 2), 0)), pow(252, 0.5))"
+    "计算公式": "mul(std(where(lt(sub(return_ratio, 2), 0), sub(return_ratio, 2), 0)), pow(252, 0.5))"
   }
 }

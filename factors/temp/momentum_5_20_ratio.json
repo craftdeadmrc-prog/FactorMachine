@@ -1,7 +1,4 @@
 {
-  "dependencies": [
-    "close"
-  ],
   "description": {
     "中文名": "5/20日动量比",
     "英文名": "Momentum 5/20 Ratio",

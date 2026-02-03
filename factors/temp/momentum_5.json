@@ -1,7 +1,4 @@
 {
-  "dependencies": [
-    "close"
-  ],
   "description": {
     "中文名": "5日动量",
     "英文名": "5-Day Momentum",

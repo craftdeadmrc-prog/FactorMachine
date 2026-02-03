@@ -6,7 +6,7 @@ description = {
         "min_periods": "窗口内最小有效观测数量，默认为 1"
     },
     "return": "滚动最大值序列",
-    "example": "rolling_max(high, window=20)"
+    "example": "rolling_max(high, 20)"
 }
 
 def rolling_max(series, window, min_periods=1):

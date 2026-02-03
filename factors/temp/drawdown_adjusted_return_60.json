@@ -1,8 +1,4 @@
 {
-  "dependencies": [
-    "close",
-    "max_drawdown"
-  ],
   "description": {
     "中文名": "回撤调整收益",
     "英文名": "Drawdown-Adjusted Return",

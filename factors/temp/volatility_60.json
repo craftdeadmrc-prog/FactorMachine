@@ -1,7 +1,4 @@
 {
-  "dependencies": [
-    "return_ratio"
-  ],
   "description": {
     "中文名": "60日波动率",
     "英文名": "60-Day Volatility",

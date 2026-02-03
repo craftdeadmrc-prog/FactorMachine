@@ -1,9 +1,4 @@
 {
-  "dependencies": [
-    "volume",
-    "volume_ma_20",
-    "volatility_20"
-  ],
   "description": {
     "中文名": "量价波动率比",
     "英文名": "Volume Volatility Ratio",

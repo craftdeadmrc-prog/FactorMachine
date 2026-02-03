@@ -1,0 +1,12 @@
+{
+  "description": {
+    "中文名": "20日收盘移动平均线",
+    "英文名": "20-Day Close Moving Average",
+    "变量名": "ma_20"
+  },
+  "info": {
+    "介绍": "20日简单移动平均线",
+    "日期": "",
+    "计算公式": "rolling_mean(close, 20)"
+  }
+}

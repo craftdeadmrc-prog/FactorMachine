@@ -5,7 +5,7 @@ description = {
         "min_periods": "窗口内最小有效观测数量，默认为 1"
     },
     "return": "滚动均值序列",
-    "example": "rolling_mean(close, window=20)"
+    "example": "rolling_mean(close, 20)"
 }
 
 def rolling_mean(series, window, min_periods=1):

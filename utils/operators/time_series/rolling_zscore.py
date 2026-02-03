@@ -1,4 +1,4 @@
-# FactorMachine/utils/operators/time_series/ts_zscore.py
+# FactorMachine/utils/operators/time_series/rolling_zscore.py
 
 description = {
     "description": "对时间序列进行滚动 z-score 标准化，仅使用过去 window 期数据",
@@ -7,10 +7,10 @@ description = {
         "window": "滚动窗口长度（大于 1 的正整数），例如 20 表示使用过去 20 期数据"
     },
     "return": "滚动 z-score 标准化后的时间序列，索引与输入一致；前 window-1 个点为 NaN",
-    "example": "ts_zscore(factor_ts, window=20)"
+    "example": "rolling_zscore(factor, 20)"
 }
 
-def ts_zscore(x, window):
+def rolling_zscore(x, window):
     """
     时间序列滚动 z-score 标准化算子
     """

@@ -1,8 +1,4 @@
 {
-  "dependencies": [
-    "volume",
-    "outstanding_share"
-  ],
   "description": {
     "中文名": "换手率",
     "英文名": "Turnover Ratio",

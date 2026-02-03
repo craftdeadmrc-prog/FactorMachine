@@ -1,5 +1,4 @@
 {
-  "dependencies": ["close"],
   "description": {
     "中文名": "26日收盘移动平均线",
     "英文名": "26-Day Close Moving Average",

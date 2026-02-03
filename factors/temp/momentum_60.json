@@ -1,7 +1,4 @@
 {
-  "dependencies": [
-    "close"
-  ],
   "description": {
     "中文名": "60日动量",
     "英文名": "60-Day Momentum",

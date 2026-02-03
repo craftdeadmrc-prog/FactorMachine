@@ -12,5 +12,4 @@ def neg(x):
     """
     取负算子
     """
-    import numpy as np
     return -x

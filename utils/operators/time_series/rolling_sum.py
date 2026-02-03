@@ -6,7 +6,7 @@ description = {
         "min_periods": "窗口内最小有效观测数量，默认为 1"
     },
     "return": "滚动求和序列",
-    "example": "rolling_sum(return_ratio, window=5)"
+    "example": "rolling_sum(return_ratio, 5)"
 }
 
 def rolling_sum(series, window, min_periods=1):

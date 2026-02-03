@@ -6,7 +6,7 @@ description = {
         "min_periods": "窗口内最小有效观测数量，默认为 1"
     },
     "return": "滚动最小值序列",
-    "example": "rolling_min(low, window=20)"
+    "example": "rolling_min(low, 20)"
 }
 
 def rolling_min(series, window, min_periods=1):

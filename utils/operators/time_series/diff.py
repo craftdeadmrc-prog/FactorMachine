@@ -6,7 +6,7 @@ description = {
         "periods": "差分的阶数，默认为 1"
     },
     "return": "差分后的序列",
-    "example": "diff(close, periods=1)"
+    "example": "diff(close, 1)"
 }
 
 def diff(series, periods=1):

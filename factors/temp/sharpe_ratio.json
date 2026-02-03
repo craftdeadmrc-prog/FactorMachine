@@ -1,8 +1,4 @@
 {
-  "dependencies": [
-    "annual_return_ratio",
-    "annual_volatility_ratio"
-  ],
   "description": {
     "中文名": "夏普比率",
     "英文名": "Sharpe Ratio",

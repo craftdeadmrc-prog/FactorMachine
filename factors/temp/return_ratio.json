@@ -1,7 +1,4 @@
 {
-  "dependencies": [
-    "close"
-  ],
   "description": {
     "中文名": "日收益率",
     "英文名": "Daily Return Ratio",

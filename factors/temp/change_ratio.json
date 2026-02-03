@@ -1,8 +1,4 @@
 {
-  "dependencies": [
-    "open",
-    "close"
-  ],
   "description": {
     "中文名": "当日涨幅",
     "英文名": "Daily Change Ratio",

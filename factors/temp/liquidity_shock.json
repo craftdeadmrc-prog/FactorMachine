@@ -1,9 +1,4 @@
 {
-  "dependencies": [
-    "close",
-    "volume",
-    "volume_ma_20"
-  ],
   "description": {
     "中文名": "流动性冲击",
     "英文名": "Liquidity Shock",

@@ -1,9 +1,4 @@
 {
-  "dependencies": [
-    "high",
-    "low",
-    "close"
-  ],
   "description": {
     "中文名": "跳跃波动率",
     "英文名": "Jump Volatility",

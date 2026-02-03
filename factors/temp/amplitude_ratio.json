@@ -1,5 +1,4 @@
 {
-  "dependencies": ["high", "low", "open"],
   "description": {
     "中文名": "日内振幅",
     "英文名": "Daily Amplitude Ratio",

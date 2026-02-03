@@ -5,7 +5,7 @@ description = {
         "min_periods": "窗口内最小有效观测数量，默认为 1"
     },
     "return": "滚动标准差序列",
-    "example": "rolling_std(return_ratio, window=20)"
+    "example": "rolling_std(return_ratio, 20)"
 }
 
 def rolling_std(series, window, min_periods=1):

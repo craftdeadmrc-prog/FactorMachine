@@ -5,7 +5,7 @@ description = {
         "x": "输入序列"
     },
     "return": "tanh 变换后的序列，取值区间为 (-1, 1)",
-    "example": "tanh(zscore(return_ratio))"
+    "example": "tanh(return_ratio)"
 }
 
 def tanh(x):

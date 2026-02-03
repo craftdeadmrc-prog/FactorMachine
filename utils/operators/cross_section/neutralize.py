@@ -4,13 +4,13 @@ description = {
     "description": "对因子进行截面中性化处理：按分组变量在组内做 z-score 标准化（减去组内均值并除以组内标准差）",
     "args": {
         "x": "输入因子数据，pandas.Series 或 pandas.DataFrame（按列独立处理中性化）",
-        "by": "分组变量（如行业、市值分组等），与 x 在索引上对齐的 pandas.Series 或一维数组"
+        "group_by": "分组变量（如行业、市值分组等），与 x 在索引上对齐的 pandas.Series 或一维数组，默认为 'date' 表示按日期截面中性化"
     },
     "return": "中性化后的因子数据，与 x 形状一致",
-    "example": "neutralize(factor_value, industry_code)"
+    "example": "neutralize(factor_value, 'industry')"
 }
 
-def neutralize(x, by):
+def neutralize(x, group_by='date'):
     """
     截面中性化算子：按分组变量在组内做 z-score 标准化
     """
@@ -24,9 +24,9 @@ def neutralize(x, by):
         # x 非 pandas 类型时，只能假设 by 已内含正确索引或顺序
         idx = None
 
-    by_series = by
+    by_series = group_by
     if not isinstance(by_series, pd.Series):
-        by_series = pd.Series(by, index=idx)
+        by_series = pd.Series(group_by, index=idx)
 
     # DataFrame：对每一列分别中性化
     if isinstance(x, pd.DataFrame):

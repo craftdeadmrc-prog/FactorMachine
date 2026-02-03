@@ -6,14 +6,13 @@ description = {
         "min_periods": "窗口内最小有效观测数量，默认为 1"
     },
     "return": "滚动峰度序列",
-    "example": "rolling_kurtosis(return_ratio, window=60)"
+    "example": "rolling_kurtosis(return_ratio, 60)"
 }
 
 def rolling_kurtosis(series, window, min_periods=1):
     """
     简单滚动峰度算子
     """
-    import pandas as pd
     import scipy.stats as stats
 
     def _kurt(x):
