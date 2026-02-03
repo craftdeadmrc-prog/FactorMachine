@@ -4,83 +4,89 @@
 from __future__ import annotations
 
 import os
-import sys
-import inspect
 from typing import List, Dict, Optional, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from core.storage import load_dataframe
 
 import pandas as pd
 
-# 确保项目根目录在 sys.path 中
-_script_path = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(_script_path)))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
+# 列筛选映射表：评估时只加载必要字段，避免读入换手率等无关列
+COLUMN_MAPPING = {
+    "date": "date",
+    "code": "code",
+    "close": "close",
+    "open": "open",
+    "high": "high",
+    "low": "low",
+    "volume": "volume",
+    "amount": "amount",
+}
 
 from core.config import MAX_CONCURRENCY
-from utils.eval import labels, ic
+from utils.eval.labels import build_forward_return_label
+from utils.eval.ic import calculate_ic_series, calculate_ic_summary
 
 
 class FactorEvaluator:
-    """
-    因子评估器：负责加载数据和因子，进行多线程评估并汇总结果。
-
-    特点：
-        - 只负责评估调度，不进行文件创建
-        - 并发上限由 core.config.MAX_CONCURRENCY 控制
-        - 返回结构化结果，便于导出和可视化
-    """
-
     def __init__(self, market_type: str):
         self.market_type = market_type
-        self.project_root = _project_root
-        self.data_dir = os.path.join(self.project_root, "data")
-        self.factor_results_dir = os.path.join(self.project_root, "factor_results")
-
+        # 因子结果目录名与现有工程保持一致：项目根下 factor_results
+        self.factor_results_dir = os.path.join("factor_results")
         if not os.path.isdir(self.factor_results_dir):
             raise FileNotFoundError(f"因子结果目录不存在: {self.factor_results_dir}")
-
         self.max_workers = MAX_CONCURRENCY
 
-    # ---------------- 基础数据与因子加载 ----------------
+    # 评估阶段需要的列统一在这里控制
+    _column_mapping = {
+        "date": "date",
+        "code": "code",
+        "close": "close",
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "volume": "volume",
+        "amount": "amount",
+    }
 
-    def load_base_data(self) -> pd.DataFrame:
+    def load_base_data(self, use_only: Optional[List[str]] = None) -> pd.DataFrame:
         """
-        加载基础市场数据，要求路径：
-            data/{market_type}.parquet
-        且至少包含列：date, code, close
+        加载基础市场数据，只加载必要列。
+        表名 = market_type，对应 DATA_PATH/{market_type}.parquet。
         """
-        data_path = os.path.join(self.data_dir, f"{self.market_type}.parquet")
-        if not os.path.isfile(data_path):
-            raise FileNotFoundError(f"市场数据文件不存在: {data_path}")
-        df = pd.read_parquet(data_path)
+        df = load_dataframe(self.market_type)
+
+        cols_to_load = use_only or list(self._column_mapping.keys())
+        df = df[cols_to_load]
+
+        required_cols = ["date", "code", "close"]
+        for col in required_cols:
+            if col not in df.columns:
+                raise ValueError(f"基础数据必须包含列: {col}")
         return df
 
-    def load_factor(self, factor_name: str) -> pd.Series:
+    def load_factor(self, factor_name: str) -> Optional[pd.Series]:
         """
-        加载单个因子数据，要求路径：
-            factor_results/{market_type}_{factor_name}.parquet
-        返回与基础数据行数对齐的一维 Series。
+        加载单个因子数据。
+        表名 = {market_type}_{factor_name}
+        实际 parquet 由 core.storage 决定路径（DATA_PATH/{表名}.parquet）。
         """
+        # 仍然保留 factor_results 目录存在性判断，兼容你之前的约定
         file_path = os.path.join(
             self.factor_results_dir, f"{self.market_type}_{factor_name}.parquet"
         )
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"因子文件不存在: {file_path}")
+        if not os.path.exists(file_path):
+            return None
 
-        factor_df = pd.read_parquet(file_path)
-        if isinstance(factor_df, pd.DataFrame):
-            if factor_df.shape[1] == 1:
-                series = factor_df.iloc[:, 0]
-            else:
-                if factor_name in factor_df.columns:
-                    series = factor_df[factor_name]
-                else:
-                    raise ValueError(f"因子文件 {file_path} 列不唯一且不包含列名 {factor_name}")
-        else:
-            series = factor_df
+        df = load_dataframe(f"{self.market_type}_{factor_name}")
+        if df is None or df.empty:
+            return None
 
-        return series
+        if isinstance(df, pd.DataFrame):
+            if df.shape[1] == 1:
+                return df.iloc[:, 0]
+            elif factor_name in df.columns:
+                return df[factor_name]
+        return df
 
     def get_all_factor_names(self) -> List[str]:
         """
@@ -106,7 +112,7 @@ class FactorEvaluator:
         将一维因子/标签序列转换为 date*code 面板。
 
         要求：
-            - series 的 index 与 base_data.index 一一对应。
+            - series 的长度与 base_data 行数一致。
         """
         if len(series) != len(base_data):
             raise ValueError("series 长度必须与基础数据行数一致")
@@ -140,7 +146,7 @@ class FactorEvaluator:
             }
         """
         factor_series = self.load_factor(factor_name)
-        label_series = labels.build_forward_return_label(
+        label_series = build_forward_return_label(
             data_df=base_data,
             horizon=horizon,
             log_return=False,
@@ -149,20 +155,19 @@ class FactorEvaluator:
         factor_panel = self._to_panel(factor_series, base_data)
         label_panel = self._to_panel(label_series, base_data)
 
-        ic_series = ic.calculate_ic_series(
+        ic_series = calculate_ic_series(
             factor_panel=factor_panel,
             label_panel=label_panel,
             method="spearman",
         )
-        ic_summary = ic.calculate_ic_summary(ic_series)
+        ic_summary = calculate_ic_summary(ic_series)
 
-        result: Dict[str, Any] = {
+        return {
             "factor": factor_name,
             "horizon": horizon,
             "ic_series": ic_series,
             "ic_summary": ic_summary,
         }
-        return result
 
     # ---------------- 多因子多 horizon 评估 ----------------
 

@@ -12,7 +12,7 @@ from typing import Dict, Any
 def calculate_ic_series(
     factor_panel: pd.DataFrame,
     label_panel: pd.DataFrame,
-    method: str = "spearman"
+    method: str = "spearman",
 ) -> pd.Series:
     """
     计算因子 IC 时间序列（按日期逐截面相关性）。
@@ -36,6 +36,7 @@ def calculate_ic_series(
         factor_series = factor_panel.loc[date]
         label_series = label_panel.loc[date]
 
+        # 去除缺失值
         mask = ~(factor_series.isna() | label_series.isna())
         if mask.sum() < 5:
             ic_dict[date] = np.nan
@@ -72,11 +73,12 @@ def calculate_ic_summary(ic_series: pd.Series) -> Dict[str, Any]:
 
     返回:
         dict
-            IC 统计结果，适合直接转成 DataFrame 或导出 JSON/CSV。
+            IC 统计结果。
     """
     s = ic_series.dropna()
+    n = len(s)
 
-    if len(s) == 0:
+    if n == 0:
         return {
             "mean_ic": np.nan,
             "std_ic": np.nan,
@@ -88,7 +90,6 @@ def calculate_ic_summary(ic_series: pd.Series) -> Dict[str, Any]:
 
     mean_ic = float(s.mean())
     std_ic = float(s.std())
-    n = int(len(s))
 
     if std_ic != 0.0:
         t_value = mean_ic / (std_ic / np.sqrt(n))
@@ -102,8 +103,8 @@ def calculate_ic_summary(ic_series: pd.Series) -> Dict[str, Any]:
     return {
         "mean_ic": mean_ic,
         "std_ic": std_ic,
-        "t_value": float(t_value),
-        "ic_ir": float(ic_ir),
+        "t_value": t_value,
+        "ic_ir": ic_ir,
         "positive_ratio": positive_ratio,
         "valid_periods": n,
     }

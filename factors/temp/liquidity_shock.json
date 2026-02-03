@@ -1,0 +1,16 @@
+{
+  "dependencies": [
+    "close",
+    "volume",
+    "volume_ma_20"
+  ],
+  "description": {
+    "中文名": "流动性冲击",
+    "英文名": "Liquidity Shock",
+    "变量名": "liquidity_shock"
+  },
+  "info": {
+    "介绍": "综合价格单日冲击与成交量放大倍数构造的流动性冲击因子，用于捕捉高冲击高成交的流动性事件，在近期机构流动性风险监控与事件驱动策略中应用较多。",
+    "计算公式": "mul(abs(div(sub(close, shift(close, 1)), shift(close, 1))), div(volume, volume_ma_20))"
+  }
+}

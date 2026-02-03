@@ -9,6 +9,7 @@ from typing import Dict, List, Set, Optional, Tuple
 import concurrent.futures
 
 from core.config import DATA_PATH, MAX_CONCURRENCY
+from core.storage import load_dataframe, save_dataframe
 from utils.symbol.ast_executor import load_operators, SafeASTExecutor
 
 
@@ -24,27 +25,19 @@ class FactorLoader:
         - factors_dir: 相对项目根目录的因子 JSON 根目录
         - force_update: 是否强制重新计算并覆盖已有结果
         """
-        # 当前文件: .../FactorMachine/utils/symbol/loader.py
-        self.current_dir = os.path.dirname(os.path.abspath(__file__))
-        # 项目根目录: .../FactorMachine
-        self.root_dir = os.path.abspath(os.path.join(self.current_dir, "../../"))
-
         # 因子定义目录
-        if os.path.isabs(factors_dir):
-            self.factors_dir = str(factors_dir)
-        else:
-            self.factors_dir = os.path.join(self.root_dir, str(factors_dir))
+        self.factors_dir = os.path.join(factors_dir)
 
         # 原始行情数据文件: DATA_PATH/{market_type}.parquet
         self.market_type = market_type
         self.parquet_path = os.path.join(DATA_PATH, f"{self.market_type}.parquet")
 
         # 因子结果目录: FactorMachine/factor_results/
-        self.factor_results_dir = os.path.join(self.root_dir, "factor_results")
+        self.factor_results_dir = os.path.join("factor_results")
         os.makedirs(self.factor_results_dir, exist_ok=True)
 
         # 动态加载算子 & AST 执行器
-        self.operators_dir = os.path.join(self.root_dir, "utils", "operators")
+        self.operators_dir = os.path.join("utils", "operators")
         self.operators = load_operators(self.operators_dir)
         self.executor = SafeASTExecutor(self.operators)
 
@@ -256,9 +249,11 @@ class FactorLoader:
     # ------------------------------------------------------------------
 
     def load_parquet(self) -> None:
-        """只加载一次大 parquet，并初始化 working_df + 已有因子"""
         if self.parquet_df is None:
-            self.parquet_df = pd.read_parquet(self.parquet_path)
+            # 按 market_type 作为表名使用 storage
+            self.parquet_df = load_dataframe(self.market_type)
+            if self.parquet_df is None or self.parquet_df.empty:
+                raise ValueError(f"市场数据 {self.market_type} 加载失败或为空")
             self.working_df = self.parquet_df.copy()
             self._load_all_existing_factors()
 
@@ -280,31 +275,32 @@ class FactorLoader:
                         self.working_df[factor_name] = loaded.values
 
     def load_factor(self, name: str) -> Optional[pd.Series]:
-        """从 factor_results 加载已有因子（若 force_update=False）"""
         if self.force_update:
             return None
 
-        filename = f"{self.market_type}_{name}.parquet"
-        filepath = os.path.join(self.factor_results_dir, filename)
-        if not os.path.exists(filepath):
+        # 因子表名统一为 {market_type}_{factor_name}
+        factor_df = load_dataframe(f"{self.market_type}_{name}")
+        if factor_df is None or factor_df.empty:
             return None
 
-        if name in self.factor_cache:
-            return self.factor_cache[name]
+        if isinstance(factor_df, pd.DataFrame):
+            if factor_df.shape[1] == 1:
+                series = factor_df.iloc[:, 0]
+            elif name in factor_df.columns:
+                series = factor_df[name]
+            else:
+                raise ValueError(f"因子 {name} 文件列不唯一且不包含列名 {name}")
+        else:
+            series = factor_df
 
-        series = pd.read_parquet(filepath)
-        if isinstance(series, pd.DataFrame):
-            series = series[name]
         self.factor_cache[name] = series
         return series
 
     def save_factor(self, name: str, series: pd.Series) -> str:
-        """保存因子结果到 factor_results 目录"""
-        filename = f"{self.market_type}_{name}.parquet"
-        filepath = os.path.join(self.factor_results_dir, filename)
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        series.to_frame(name).reset_index(drop=True).to_parquet(filepath, index=False)
-        return filepath
+        table_name = f"{self.market_type}_{name}"
+        # 使用 storage 保存，自动压缩与类型优化
+        save_dataframe(series.to_frame(name), table_name, self.factor_results_dir)
+        return os.path.join(self.factor_results_dir, f"{table_name}.parquet")
 
     def _execute_factor(self, name: str, df: pd.DataFrame) -> pd.Series:
         """执行单个因子"""

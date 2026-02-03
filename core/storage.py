@@ -39,14 +39,14 @@ def get_last_update_date(table_name: str):
     config = load_table_config(table_name)
     return config.get("last_update")
 
-def load_dataframe(table_name: str) -> pd.DataFrame:
-    file_path = os.path.join(DATA_PATH, f"{table_name}.parquet")
+def load_dataframe(table_name: str, path=DATA_PATH) -> pd.DataFrame:
+    file_path = os.path.join(path, f"{table_name}.parquet")
     if not os.path.exists(file_path):
         return pd.DataFrame()
     return pd.read_parquet(file_path)
 
 
-def save_dataframe(df: pd.DataFrame, table_name: str):
+def save_dataframe(df: pd.DataFrame, table_name: str, path=DATA_PATH):
     """
     通用保存：
     - 接收任意 DataFrame + 表名
@@ -86,5 +86,5 @@ def save_dataframe(df: pd.DataFrame, table_name: str):
 
     save_table_config(table_name, config)
 
-    file_path = os.path.join(DATA_PATH, f"{table_name}.parquet")
+    file_path = os.path.join(path, f"{table_name}.parquet")
     df.to_parquet(file_path, index=False)

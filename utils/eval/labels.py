@@ -25,24 +25,20 @@ def build_forward_return_label(
 
     返回:
         pd.Series
-            与 data_df 行顺序一一对应的标签序列，index 对齐 data_df.index。
+            与 data_df 行顺序一一对应的标签序列。
     """
-    df = data_df.sort_values(["code", "date"]).reset_index(drop=False)
-    idx_col = "index"
+    # 按股票和日期排序，保证时间顺序正确
+    df = data_df.sort_values(["code", "date"])
 
-    def _calc(px: pd.Series) -> pd.Series:
+    def _calc_group(gp: pd.DataFrame) -> pd.Series:
+        px = gp["close"]
         px_shift = px.shift(-horizon)
         if log_return:
             return np.log(px_shift / px)
         return (px_shift - px) / px
 
-    ret = df.groupby("code", group_keys=False)["close"].transform(_calc)
-    ret.name = f"label_ret_{horizon}"
-
-    # 恢复为原始 index 顺序
-    ret.index = df[idx_col].values
-    ret = ret.sort_index()
-    return ret
+    # 直接 groupby + apply，group_keys=False 保持扁平索引
+    return df.groupby("code", group_keys=False).apply(_calc_group)
 
 
 def build_forward_vol_label(
@@ -65,17 +61,12 @@ def build_forward_vol_label(
         pd.Series
             与 data_df 行顺序一一对应的标签序列。
     """
-    df = data_df.sort_values(["code", "date"]).reset_index(drop=False)
-    idx_col = "index"
+    df = data_df.sort_values(["code", "date"])
 
-    def _calc(px: pd.Series) -> pd.Series:
+    def _calc_group(gp: pd.DataFrame) -> pd.Series:
+        px = gp["close"]
         ret = np.log(px / px.shift(1))
         vol = ret.rolling(window=window, min_periods=1).std()
         return vol.shift(-horizon)
 
-    vol_label = df.groupby("code", group_keys=False)["close"].transform(_calc)
-    vol_label.name = f"label_vol_{window}_f{horizon}"
-
-    vol_label.index = df[idx_col].values
-    vol_label = vol_label.sort_index()
-    return vol_label
+    return df.groupby("code", group_keys=False).apply(_calc_group)

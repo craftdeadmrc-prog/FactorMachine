@@ -1,0 +1,14 @@
+{
+  "dependencies": [
+    "close"
+  ],
+  "description": {
+    "中文名": "20日拥挤度动量",
+    "英文名": "20-Day Crowded Momentum",
+    "变量名": "crowded_momentum_20"
+  },
+  "info": {
+    "介绍": "基于 20 日动量的 z-score，并通过 tanh 映射到 (-1, 1) 区间得到的平滑拥挤度动量信号，用于识别动量交易是否过度拥挤，近年在多资产动量与风险溢价研究中常见。",
+    "计算公式": "tanh(zscore(div(sub(close, shift(close, 20)), shift(close, 20))))"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "dependencies": [
+    "close",
+    "max_drawdown"
+  ],
+  "description": {
+    "中文名": "回撤调整收益",
+    "英文名": "Drawdown-Adjusted Return",
+    "变量名": "drawdown_adjusted_return_60"
+  },
+  "info": {
+    "介绍": "最近 60 日价格变动相对于历史最大回撤的比率，用于同时考虑收益潜力与下行风险，是风险预算与组合构建中常用的风险调整收益因子。",
+    "计算公式": "div(div(sub(close, shift(close, 60)), shift(close, 60)), max_drawdown)"
+  }
+}
