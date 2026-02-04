@@ -3,7 +3,6 @@
 import ast
 import pandas as pd
 import os
-import inspect
 from pathlib import Path
 import importlib.util
 
@@ -45,45 +44,20 @@ def load_operators(operators_dir: str) -> dict:
 
 class SafeASTExecutor:
     """
-    精简安全 AST 执行器，支持在执行时动态添加分组参数。
-
+    精简安全 AST 执行器：
     支持节点：
       - Constant / Num
       - Name
       - Call
       - UnaryOp (仅负号)
 
-    分组规则（仅对带有 group_by 参数的算子生效）：
-      1. 默认使用 group_by='code'。
-      2. 若函数调用的最后一个位置参数是字符串常量，且为 'code' 或 'date'，
-         则移除该位置参数，并作为 group_by 关键字参数传入。
-      3. 若已通过关键字参数显式提供 group_by（例如 group_by='date'），
-         则完全按调用者指定，不做任何覆盖。
+    注意：
+    - 不再支持基础二元运算符（+ - * / ** 等）
+    - 所有基础运算需通过算子（如 add/sub/mul/div/pow）实现
     """
-
-    # 允许作为分组字段的字符串字面量
-    ALLOWED_GROUP_FIELDS = {"code", "date"}
 
     def __init__(self, operators: dict) -> None:
         self.operators = operators
-        # 动态确定哪些函数具有 group_by 参数（无硬编码算子名）
-        self._groupable_functions = self._determine_groupable_functions()
-
-    def _determine_groupable_functions(self) -> set:
-        """
-        检查每个已动态加载的算子函数签名，找出带有 group_by 参数的函数名集合。
-        这些算子被视为“支持分组”的算子。
-        """
-        groupable = set()
-        for name, func in self.operators.items():
-            try:
-                sig = inspect.signature(func)
-                if "group_by" in sig.parameters:
-                    groupable.add(name)
-            except ValueError:
-                # 无法获取签名的函数（如某些内建对象），直接跳过
-                continue
-        return groupable
 
     def execute(self, expression: str, df: pd.DataFrame):
         """
@@ -116,42 +90,9 @@ class SafeASTExecutor:
 
         # 函数调用
         if isinstance(node, ast.Call):
-            # 只支持以 Name 形式直接调用的算子（保持原有约束）
-            if not isinstance(node.func, ast.Name):
-                raise TypeError(f"不支持的函数调用形式: {type(node.func).__name__}")
-
-            func_name = node.func.id
-            if func_name not in self.operators:
-                raise TypeError(f"不支持的函数调用: {func_name}")
-
-            func = self.operators[func_name]
-
-            # 先递归计算所有位置参数和关键字参数的值
+            func = self._eval(node.func, df)
             args = [self._eval(arg, df) for arg in node.args]
             kwargs = {kw.arg: self._eval(kw.value, df) for kw in node.keywords}
-
-            # —— 统一分组逻辑：仅对带 group_by 的算子生效 —— #
-            if func_name in self._groupable_functions:
-                # 1. 如果已经显式传了 group_by 关键字参数，则尊重调用者，不改动
-                if "group_by" in kwargs:
-                    pass
-                else:
-                    # 2. 检查 AST 上最后一个“原始位置参数”是否是字符串字面量
-                    #    注意：这里用 node.args 判断，而不是已求值的 args
-                    if node.args and isinstance(node.args[-1], ast.Constant) and isinstance(node.args[-1].value, str):
-                        last_val = node.args[-1].value
-                        if last_val in self.ALLOWED_GROUP_FIELDS:
-                            # 最后一个参数是分组字段名：从位置参数中剔除，将其作为 group_by
-                            args = args[:-1]
-                            kwargs["group_by"] = last_val
-                        else:
-                            # 字符串不是允许的分组字段，则使用默认 'code'
-                            kwargs["group_by"] = "code"
-                    else:
-                        # 没有显式分组字符串，默认按 'code' 分组
-                        kwargs["group_by"] = "code"
-
-            # 执行函数调用
             return func(*args, **kwargs)
 
         # 一元运算（仅支持负号）
@@ -161,5 +102,5 @@ class SafeASTExecutor:
                 return -operand
             raise TypeError(f"不支持的一元操作: {type(node.op).__name__}")
 
-        # 其他形式（包括 BinOp）统统不支持（保持原有限制）
+        # 其他形式（包括 BinOp）统统不支持
         raise TypeError(f"不支持的节点类型: {type(node).__name__}")
