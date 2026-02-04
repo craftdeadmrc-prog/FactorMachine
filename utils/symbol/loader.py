@@ -30,9 +30,7 @@ class FactorLoader:
 
         # 原始行情数据文件: DATA_PATH/{market_type}.parquet
         self.market_type = market_type
-        self.parquet_path = os.path.join(DATA_PATH, f"{self.market_type}.parquet")
-
-        # 因子结果目录: FactorMachine/factor_results/
+        # 因子结果目录: factor_results/
         self.factor_results_dir = os.path.join("factor_results")
         os.makedirs(self.factor_results_dir, exist_ok=True)
 
@@ -44,11 +42,10 @@ class FactorLoader:
         # 因子索引 & 依赖表
         self.factor_index: Dict[str, List[str]] = self._build_factor_index()
         self.factor_deps: Dict[str, dict] = self._build_factor_dependencies()
+        self.load_parquet()
 
         # 运行时缓存
         self.factor_cache: Dict[str, pd.Series] = {}
-        self.parquet_df: Optional[pd.DataFrame] = None  # 只存原始数据
-        self.working_df: Optional[pd.DataFrame] = None  # 原始数据 + 已计算因子
         self.force_update = force_update
 
         # 依赖图与批次信息（惰性计算）
@@ -164,7 +161,6 @@ class FactorLoader:
             return self._dependency_graph, self._batches
 
         # 确保已加载市场数据列，用于在依赖中跳过这些“内置因子”
-        self.load_parquet()
         self._market_columns = set(self.parquet_df.columns)
 
         # 正向依赖：factor -> set(依赖的因子名)
@@ -260,15 +256,14 @@ class FactorLoader:
     # ------------------------------------------------------------------
 
     def load_parquet(self) -> None:
-        if self.parquet_df is None:
-            # 按 market_type 作为表名使用 storage
-            self.parquet_df = load_dataframe(self.market_type)
-            if self.parquet_df is None or self.parquet_df.empty:
-                raise ValueError(f"市场数据 {self.market_type} 加载失败或为空")
-            self.working_df = self.parquet_df.copy()
-            # 同时更新市场数据已有列集合
-            self._market_columns = set(self.parquet_df.columns)
-            self._load_all_existing_factors()
+        # 按 market_type 作为表名使用 storage
+        self.parquet_df = load_dataframe(self.market_type)
+        if self.parquet_df is None or self.parquet_df.empty:
+            raise ValueError(f"市场数据 {self.market_type} 加载失败或为空")
+        self.working_df = self.parquet_df.copy()
+        # 同时更新市场数据已有列集合
+        self._market_columns = set(self.parquet_df.columns)
+        self._load_all_existing_factors()
 
     def _load_all_existing_factors(self) -> None:
         """加载所有已存在的因子文件到 working_df"""
@@ -363,7 +358,6 @@ class FactorLoader:
         - max_workers: 并行线程数，None 表示自动
         """
         # 加载全局数据
-        self.load_parquet()
 
         # 依赖拓扑与批次
         _, batches = self.analyze_dependencies()
@@ -398,7 +392,6 @@ class FactorLoader:
             for name in batch:
                 all_columns |= self._factor_columns(name)
             all_columns |= {"code", "date"}
-
             # 补充 working_df 中缺失列
             existing_cols = set(self.working_df.columns)
             missing_cols = all_columns - existing_cols
