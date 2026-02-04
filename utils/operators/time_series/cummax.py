@@ -10,5 +10,4 @@ def cummax(x):
     """
     累计最大值算子
     """
-    print(x)
     return x.cummax()
