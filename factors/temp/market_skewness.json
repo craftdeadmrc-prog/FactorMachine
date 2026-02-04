@@ -6,6 +6,6 @@
   },
   "info": {
     "介绍": "基于收益率序列的偏度，衡量收益分布的非对称性，对尾部风险敏感。",
-    "计算公式": "rolling_skew(return_ratio, window=60)"
+    "计算公式": "rolling_skew(return_ratio, 60)"
   }
 }

@@ -4,3 +4,4 @@ test_loader.py
 *__pycache__*
 *.parquet
 spider/deprecated/*
+factor_results/*

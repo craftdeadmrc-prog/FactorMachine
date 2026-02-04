@@ -9,8 +9,8 @@ description = {
     "example": "rolling_max(high, 20)"
 }
 
-def rolling_max(series, window, min_periods=1):
+def rolling_max(x, window, min_periods=1):
     """
     简单滚动最大值算子
     """
-    return series.rolling(window=window, min_periods=min_periods).max()
+    return x.rolling(window=window, min_periods=min_periods).max()

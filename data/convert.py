@@ -93,7 +93,7 @@ def convert_parquet_to_ashare_daily(input_file: str, output_file: str | None = N
         # 默认输出名：{原文件名}_ashare.parquet
         stem = Path(input_file).stem
         output_file = f"{stem}_ashare.parquet"
-
+    df.fillna(value=pd.NA, inplace=True)
     df.to_parquet(output_file, index=False)
     print(f"转换完成: {input_file} -> {output_file}")
     print("预览前几行：")

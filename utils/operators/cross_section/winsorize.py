@@ -11,7 +11,7 @@ description = {
     "example": "winsorize(factor_value, 0.01, 0.99, 'industry')"
 }
 
-def winsorize(x, lower=0.01, upper=0.99, group_by='date'):
+def winsorize(x, lower=0.01, upper=0.99):
     """
     去极值算子，支持全局和分组处理
     """
@@ -20,8 +20,6 @@ def winsorize(x, lower=0.01, upper=0.99, group_by='date'):
     if not (0.0 <= lower < upper <= 1.0):
         raise ValueError("lower 必须小于 upper 且二者均在 [0, 1] 范围内")
 
-    def group_winsorize(group):
-        q_low = np.nanquantile(group, lower)
-        q_high = np.nanquantile(group, upper)
-        return group.clip(lower=q_low, upper=q_high)
-    return x.groupby(group_by).transform(group_winsorize)
+    q_low = np.nanquantile(x, lower)
+    q_high = np.nanquantile(x, upper)
+    return x.clip(lower=q_low, upper=q_high)

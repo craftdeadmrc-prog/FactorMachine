@@ -9,7 +9,7 @@ description = {
     "example": "rolling_skew(return_ratio, 60)"
 }
 
-def rolling_skew(series, window, min_periods=1):
+def rolling_skew(x, window, min_periods=1):
     """
     简单滚动偏度算子
     """
@@ -18,4 +18,4 @@ def rolling_skew(series, window, min_periods=1):
     def _skew(x):
         return stats.skew(x)
 
-    return series.rolling(window=window, min_periods=min_periods).apply(_skew, raw=False)
+    return x.rolling(window=window, min_periods=min_periods).apply(_skew, raw=False)

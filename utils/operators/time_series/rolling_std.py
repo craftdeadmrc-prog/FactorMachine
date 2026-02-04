@@ -8,10 +8,10 @@ description = {
     "example": "rolling_std(return_ratio, 20)"
 }
 
-def rolling_std(series, window, min_periods=1):
+def rolling_std(x, window, min_periods=1):
     """
     简单滚动标准差算子
     """
-    return series.rolling(window=window, min_periods=min_periods).std()
+    return x.rolling(window=window, min_periods=min_periods).std()
 
 

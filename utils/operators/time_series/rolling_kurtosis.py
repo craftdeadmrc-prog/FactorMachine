@@ -9,7 +9,7 @@ description = {
     "example": "rolling_kurtosis(return_ratio, 60)"
 }
 
-def rolling_kurtosis(series, window, min_periods=1):
+def rolling_kurtosis(x, window, min_periods=1):
     """
     简单滚动峰度算子
     """
@@ -18,4 +18,4 @@ def rolling_kurtosis(series, window, min_periods=1):
     def _kurt(x):
         return stats.kurtosis(x)
 
-    return series.rolling(window=window, min_periods=min_periods).apply(_kurt, raw=False)
+    return x.rolling(window=window, min_periods=min_periods).apply(_kurt, raw=False)

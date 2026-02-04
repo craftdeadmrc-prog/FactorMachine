@@ -9,8 +9,8 @@ description = {
     "example": "diff(close, 1)"
 }
 
-def diff(series, periods=1):
+def diff(x, periods=1):
     """
     简单差分算子
     """
-    return series.diff(periods=periods)
+    return x.diff(periods=periods)

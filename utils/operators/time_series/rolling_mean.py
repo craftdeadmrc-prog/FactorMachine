@@ -8,8 +8,8 @@ description = {
     "example": "rolling_mean(close, 20)"
 }
 
-def rolling_mean(series, window, min_periods=1):
+def rolling_mean(x, window, min_periods=1):
     """
     简单滚动均值算子
     """
-    return series.rolling(window=window, min_periods=min_periods).mean()
+    return x.rolling(window=window, min_periods=min_periods).mean()

@@ -9,8 +9,8 @@ description = {
     "example": "shift(close, 1)"
 }
 
-def shift(series, periods=1):
+def shift(x, periods=1):
     """
     序列位移算子
     """
-    return series.shift(periods=periods)
+    return x.shift(periods=periods)

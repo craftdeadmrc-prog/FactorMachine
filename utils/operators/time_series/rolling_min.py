@@ -9,8 +9,8 @@ description = {
     "example": "rolling_min(low, 20)"
 }
 
-def rolling_min(series, window, min_periods=1):
+def rolling_min(x, window, min_periods=1):
     """
     简单滚动最小值算子
     """
-    return series.rolling(window=window, min_periods=min_periods).min()
+    return x.rolling(window=window, min_periods=min_periods).min()

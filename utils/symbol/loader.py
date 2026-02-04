@@ -319,7 +319,6 @@ class FactorLoader:
         """执行单个因子"""
         info = self.factor_deps.get(name, {})
         expr = info.get("info", {}).get("计算公式", "") or info.get("expression", "")
-
         if not expr:
             raise ValueError(f"因子 {name} 未找到计算公式")
 
@@ -331,7 +330,6 @@ class FactorLoader:
             result = pd.Series(result, index=df.index)
         if not result.name:
             result.name = name
-
         return result
 
     def _compute_and_save_factor(self, name: str, df_batch: pd.DataFrame) -> pd.Series:
@@ -339,9 +337,10 @@ class FactorLoader:
         cached = self.load_factor(name)
         if cached is not None:
             return cached
-
+        print(f"  计算因子: {name}")
         series = self._execute_factor(name, df_batch)
         self.save_factor(name, series)
+        print(f"  因子 {name} 计算并保存完成")
         self.factor_cache[name] = series
         return series
 
@@ -354,7 +353,6 @@ class FactorLoader:
         custom_factors: Optional[List[str]] = None,
         parallel: bool = True,
         max_workers: Optional[int] = None,
-        max_columns_per_batch: int = 200
     ) -> Dict[str, pd.Series]:
         """
         执行因子计算
@@ -363,7 +361,6 @@ class FactorLoader:
         - custom_factors: 自定义需要计算的因子列表，None 表示全部
         - parallel: 是否使用多线程并行
         - max_workers: 并行线程数，None 表示自动
-        - max_columns_per_batch: 每批最大列数
         """
         # 加载全局数据
         self.load_parquet()
