@@ -1,7 +1,7 @@
-# FactorMachine/utils/operators/time_series/diff.py
+# utils/operators/cross_section/diff.py
 
 description = {
-    "description": "对输入序列进行差分运算（时间序列算子）",
+    "description": "对输入序列进行差分运算（截面算子）",
     "args": {
         "periods": "差分的阶数，默认为 1"
     },

@@ -1,4 +1,4 @@
-# utils/operators/timeseries/cummax.py
+# utils/operators/cross_section/cummax.py
 description = {
     "description": "对输入序列计算从起始到当前的累计最大值（截面算子）",
     "args": {},
