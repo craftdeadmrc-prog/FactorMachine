@@ -6,8 +6,7 @@ import os
 from pathlib import Path
 import importlib.util
 import inspect
-import concurrent.futures  # 新增：用于多线程并发
-
+from rich.progress import Progress
 
 def load_operators(operators_dir: str) -> dict:
     """
@@ -114,15 +113,16 @@ class SafeASTExecutor:
             #   - 否则默认按 'code' 分组（前提是 df 一定包含 'code' 列）
             group_key = None
             if is_cross_section:
-                if node.args and isinstance(node.args[-1], ast.Constant) and isinstance(
-                    node.args[-1].value, str
+                if (
+                    node.args
+                    and isinstance(node.args[-1], ast.Constant)
+                    and isinstance(node.args[-1].value, str)
                 ):
                     group_key = node.args[-1].value
                 else:
                     group_key = "code"
 
-            # ========= 按分组拆分运算（多线程） =========
-            # 分组键存在 -> 根据 group_key 对 df 分组，并将每组数据分批传给同一个算子
+            # ========= 按分组逐组运算（每组即一个“批次”） =========
             if group_key is not None:
                 # 如果最后一个 AST 位置参数是字符串常量，则它只是“分组列名”，
                 # 不应作为算子业务参数传入，这里从 args 中剔除。
@@ -135,39 +135,36 @@ class SafeASTExecutor:
                 else:
                     real_args = args
 
-                # 使用线程池并发计算每个分组
-                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                    # 提交所有任务并保存分组索引映射
-                    tasks = []
+                # 初始化结果容器为 None，首次计算时根据返回类型动态创建
+                result = None
+
+                # 使用rich展示进度条
+                with Progress() as progress:
+                    task = progress.add_task(f"[cyan]{func.__name__}", total=len(df.groupby(group_key)))
                     for _, group_df in df.groupby(group_key):
-                        tasks.append(
-                            (group_df.index, executor.submit(func, *real_args, **kwargs))
-                        )
+                        # 调用算子时，仍传入基于整张 df 计算出的 real_args / kwargs，
+                        # 以保持与原多线程版本的语义一致。
+                        group_res = func(*real_args, **kwargs)
 
-                    result = None
-                    # 按顺序处理各分组的结果（写回在主线程，避免并发写冲突）
-                    for group_idx, future in tasks:
-                        group_res = future.result()
-
-                        # 第一次调用时，根据返回类型初始化整体结果容器
+                        # 第一次根据返回类型初始化整体结果容器
                         if result is None:
                             if isinstance(group_res, pd.Series):
-                                result = pd.Series(index=df.index, dtype=group_res.dtype)
+                                # 按整张 df 的索引预分配
+                                result = pd.Series(index=df.index, dtype=group_res.dtype, name=group_res.name)
                             elif isinstance(group_res, pd.DataFrame):
-                                result = pd.DataFrame(
-                                    index=df.index, columns=group_res.columns
-                                )
+                                result = pd.DataFrame(index=df.index, columns=group_res.columns)
                             else:
-                                # 标量或其它类型，用 Series 容器承接
+                                # 标量或其他类型，用 Series 容器承接
                                 result = pd.Series(index=df.index, dtype=type(group_res))
 
-                        # 将当前组结果写回到整体结果中，按 group_df 的索引对齐
+                        # 将当前分组结果写回整体结果
+                        # 这里假定算子返回结果在逻辑上与当前 group_df 对齐，
+                        # 若为标量则自动广播。
                         if isinstance(result, pd.Series):
-                            result.loc[group_idx] = group_res
-                        elif isinstance(result, pd.DataFrame):
-                            result.loc[group_idx] = group_res
+                            result.loc[group_df.index] = group_res
                         else:
-                            result.loc[group_idx] = group_res
+                            result.loc[group_df.index] = group_res
+                        progress.update(task, advance=1)
 
                 return result
 
