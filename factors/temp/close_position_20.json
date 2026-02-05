@@ -6,6 +6,7 @@
   },
   "info": {
     "介绍": "收盘价在过去20日最高价和最低价区间中的相对位置。",
+    "日期":"",
     "计算公式": "div(sub(close, rolling_min(low, 20)), sub(rolling_max(high, 20), rolling_min(low, 20)))"
   }
 }

@@ -4,6 +4,7 @@ import ast
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.config import DATA_PATH, MAX_CONCURRENCY
 from core.storage import load_dataframe, save_dataframe
@@ -318,7 +319,7 @@ class FactorLoader:
 
         参数:
         - custom_factors: 自定义需要计算的因子列表，None 表示全部
-        - parallel / max_workers: 参数保留以兼容原接口，目前实现为顺序计算
+        - parallel / max_workers: 支持多线程，受 MAX_CONCURRENCY 限制
         """
         # 目标因子（含其所有前置因子）
         if custom_factors:
@@ -340,35 +341,43 @@ class FactorLoader:
         # 逐批执行（保持原顺序语义）
         for batch_idx, batch in enumerate(filtered_batches, 1):
             print(f"[批次 {batch_idx}/{len(filtered_batches)}] 因子: {batch}")
-            # 该批次所有因子的 AST 变量依赖并集
-            all_vars: Set[str] = set()
+
+            # 收集该批次所有因子的依赖
+            batch_deps: Set[str] = set()
             for name in batch:
-                all_vars = self._factor_dependencies(name)
-                # 只需要的列 = 市场原始列 ∩ all_vars，再加上 code/date
-                needed_market_cols = (all_vars & self._market_columns) | {"code", "date"}
+                batch_deps |= self._factor_dependencies(name)
 
-                # 同时，某些变量是前置因子名（与 factor_deps 交集），要确保在 working_df 中
-                needed_factor_cols = all_vars & set(self.factor_deps.keys())
-
-                # 先保证 working_df 里有所有需要的市场列
-                for col in needed_market_cols:
-                    if col not in self.working_df.columns and col in self.parquet_df.columns:
-                        self.working_df[col] = self.parquet_df[col]
-
-                # 再保证 working_df 里有所有前置因子列（文件或前面批次）
-                for col in needed_factor_cols:
-                    if col in self.working_df.columns:
-                        continue
-                    loaded = self.load_factor(col)
+            # 确保所有依赖因子列都在 working_df 中（若已存在文件则加载）
+            for dep in batch_deps:
+                if dep in self.factor_deps and dep not in self.working_df.columns:
+                    loaded = self.load_factor(dep)
                     if loaded is not None:
-                        self.working_df[col] = loaded.values
-                    # 若仍不存在，则会在其所在/之前批次被计算出来，拓扑保证引用安全
-                # 综合本批所需列（仅筛选过的列）
-                all_columns: Set[str] = needed_market_cols | (needed_factor_cols & set(self.working_df.columns))
-                df_batch = self.working_df[list(all_columns)]
-                series = self._compute_and_save_factor(name, df_batch)
-                results[name] = series
-                if name not in self.working_df.columns:
+                        self.working_df[dep] = loaded.values
+
+            # 构建该批次所需的所有列
+            needed_market_cols = (batch_deps & self._market_columns) | {"code", "date"}
+            needed_factor_cols = batch_deps & set(self.factor_deps.keys())
+            all_columns = needed_market_cols | needed_factor_cols
+            df_batch = self.working_df[list(all_columns)]
+
+            # 使用多线程执行本批次因子
+            if parallel and MAX_CONCURRENCY > 1:
+                max_workers = min(max_workers or MAX_CONCURRENCY, len(batch))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_to_name = {
+                        executor.submit(self._compute_and_save_factor, name, df_batch): name
+                        for name in batch
+                    }
+                    for future in as_completed(future_to_name):
+                        name = future_to_name[future]
+                        series = future.result()
+                        results[name] = series
+                        self.working_df[name] = series.values
+            else:
+                # 顺序执行
+                for name in batch:
+                    series = self._compute_and_save_factor(name, df_batch)
+                    results[name] = series
                     self.working_df[name] = series.values
 
         return results

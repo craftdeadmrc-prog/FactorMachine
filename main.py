@@ -157,7 +157,7 @@ def main():
         print(f"\n=== 开始计算 {market} 市场因子 ===")
         # FactorLoader 会自动从 DATA_PATH/{market}.parquet 读取数据
         loader = FactorLoader(market_type=market)
-        loader.run_factors(['max_drawdown'],max_workers=args.concurrency)
+        loader.run_factors(['volatility_20'],max_workers=args.concurrency)
         print(f"=== {market} 市场因子计算完成 ===")
 
 
