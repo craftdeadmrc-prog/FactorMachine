@@ -33,8 +33,7 @@ class FactorLoader:
         os.makedirs(self.factor_results_dir, exist_ok=True)
 
         # 动态加载算子 & AST 执行器
-        self.operators_dir = os.path.join("utils", "operators")
-        self.operators = load_operators(self.operators_dir)
+        self.operators = load_operators(os.path.join("utils", "operators"))
         self.executor = SafeASTExecutor(self.operators)
 
         # 因子索引 & 依赖表
@@ -310,7 +309,7 @@ class FactorLoader:
         custom_factors: Optional[List[str]] = None,
         parallel: bool = True,
         max_workers: Optional[int] = None,
-    ) -> Dict[str, pd.Series]:
+    ) -> None:
         """
         执行因子计算
 
@@ -333,33 +332,27 @@ class FactorLoader:
         for batch in batches:
             if any(f in target_factors for f in batch):
                 filtered_batches.append([f for f in batch if f in target_factors])
-        results: Dict[str, pd.Series] = {}
 
         # 逐批执行（保持原顺序语义）
         for batch_idx, batch in enumerate(filtered_batches, 1):
             print(f"[批次 {batch_idx}/{len(filtered_batches)}] 因子: {batch}")
+            batch_deps: Set[str] = set()
+            for name in batch:
+                batch_deps |= self._factor_dependencies(name)
+            for dep in batch_deps:
+                if dep not in self.working_df.columns:
+                    loaded = self.load_factor(dep)
+                    if loaded is not None:
+                        self.working_df[dep] = loaded.values
 
             # 使用多线程执行本批次因子
             if parallel and MAX_CONCURRENCY > 1:
                 max_workers = min(max_workers or MAX_CONCURRENCY, len(batch))
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     # 收集该批次所有因子的依赖
-                    batch_deps: Set[str] = set()
+                    # 确保所有依赖因子列都在 working_df 中（若不存在文件则加载）
                     for name in batch:
-                        batch_deps = self._factor_dependencies(name)
-
-                        # 确保所有依赖因子列都在 working_df 中（若已存在文件则加载）
-                        for dep in batch_deps:
-                            if dep in self.factor_deps and dep not in self.working_df.columns:
-                                loaded = self.load_factor(dep)
-                                if loaded is not None:
-                                    self.working_df[dep] = loaded.values
-                        print(self.working_df.columns)
-
-                        # 构建该批次所需的所有列
-                        needed_market_cols = (batch_deps & self._market_columns) | {"code", "date"}
-                        needed_factor_cols = batch_deps & set(self.factor_deps.keys())
-                        all_columns = needed_market_cols | needed_factor_cols
+                        all_columns = self._factor_dependencies(name) | {"code", "date"}
                         df_batch = self.working_df[list(all_columns)]
                         future_to_name = {
                             executor.submit(self._compute_and_save_factor, name, df_batch): name
@@ -367,16 +360,13 @@ class FactorLoader:
                     for future in as_completed(future_to_name):
                         name = future_to_name[future]
                         series = future.result()
-                        results[name] = series
                         self.working_df[name] = series.values
             else:
                 # 顺序执行
                 for name in batch:
                     series = self._compute_and_save_factor(name, df_batch)
-                    results[name] = series
                     self.working_df[name] = series.values
 
-        return results
 
     # ------------------------------------------------------------------
     # 辅助方法
