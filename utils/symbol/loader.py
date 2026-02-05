@@ -43,7 +43,6 @@ class FactorLoader:
         self.load_parquet()
 
         # 运行时缓存
-        self.factor_cache: Dict[str, pd.Series] = {}
         self.force_update = force_update
 
         # 依赖图与批次信息（惰性计算）
@@ -224,11 +223,10 @@ class FactorLoader:
 
     def load_parquet(self) -> None:
         # 加载市场数据
-        self.parquet_df = load_dataframe(self.market_type)
-        if self.parquet_df is None or self.parquet_df.empty:
+        self.working_df = load_dataframe(self.market_type)
+        if self.working_df is None or self.working_df.empty:
             raise ValueError(f"市场数据 {self.market_type} 加载失败或为空")
-        self.working_df = self.parquet_df.copy()
-        self._market_columns = set(self.parquet_df.columns)
+        self._market_columns = set(self.working_df.columns)
         self.factor_deps = {k: v for k, v in self.factor_deps.items() if k not in self._market_columns}
         self._load_all_existing_factors()
 
@@ -268,7 +266,6 @@ class FactorLoader:
         else:
             series = factor_df
 
-        self.factor_cache[name] = series
         return series
 
     def save_factor(self, name: str, series: pd.Series) -> str:
@@ -298,10 +295,10 @@ class FactorLoader:
         cached = self.load_factor(name)
         if cached is not None:
             return cached
-
+        print(f"计算因子 {name} ...")
         series = self._execute_factor(name, df_batch)
         self.save_factor(name, series)
-        self.factor_cache[name] = series
+        print(f"因子 {name} 计算完成，已保存。")
         return series
 
     # ------------------------------------------------------------------
@@ -342,32 +339,31 @@ class FactorLoader:
         for batch_idx, batch in enumerate(filtered_batches, 1):
             print(f"[批次 {batch_idx}/{len(filtered_batches)}] 因子: {batch}")
 
-            # 收集该批次所有因子的依赖
-            batch_deps: Set[str] = set()
-            for name in batch:
-                batch_deps |= self._factor_dependencies(name)
-
-            # 确保所有依赖因子列都在 working_df 中（若已存在文件则加载）
-            for dep in batch_deps:
-                if dep in self.factor_deps and dep not in self.working_df.columns:
-                    loaded = self.load_factor(dep)
-                    if loaded is not None:
-                        self.working_df[dep] = loaded.values
-
-            # 构建该批次所需的所有列
-            needed_market_cols = (batch_deps & self._market_columns) | {"code", "date"}
-            needed_factor_cols = batch_deps & set(self.factor_deps.keys())
-            all_columns = needed_market_cols | needed_factor_cols
-            df_batch = self.working_df[list(all_columns)]
-
             # 使用多线程执行本批次因子
             if parallel and MAX_CONCURRENCY > 1:
                 max_workers = min(max_workers or MAX_CONCURRENCY, len(batch))
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    future_to_name = {
-                        executor.submit(self._compute_and_save_factor, name, df_batch): name
-                        for name in batch
-                    }
+                    # 收集该批次所有因子的依赖
+                    batch_deps: Set[str] = set()
+                    for name in batch:
+                        batch_deps = self._factor_dependencies(name)
+
+                        # 确保所有依赖因子列都在 working_df 中（若已存在文件则加载）
+                        for dep in batch_deps:
+                            if dep in self.factor_deps and dep not in self.working_df.columns:
+                                loaded = self.load_factor(dep)
+                                if loaded is not None:
+                                    self.working_df[dep] = loaded.values
+                        print(self.working_df.columns)
+
+                        # 构建该批次所需的所有列
+                        needed_market_cols = (batch_deps & self._market_columns) | {"code", "date"}
+                        needed_factor_cols = batch_deps & set(self.factor_deps.keys())
+                        all_columns = needed_market_cols | needed_factor_cols
+                        df_batch = self.working_df[list(all_columns)]
+                        future_to_name = {
+                            executor.submit(self._compute_and_save_factor, name, df_batch): name
+                        }
                     for future in as_completed(future_to_name):
                         name = future_to_name[future]
                         series = future.result()
