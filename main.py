@@ -7,7 +7,7 @@ import sys
 from core.scheduler import run_spiders
 from core.config import MAX_CONCURRENCY
 from utils.symbol.loader import FactorLoader
-
+import datetime
 
 def get_available_markets() -> list:
     """
@@ -84,10 +84,12 @@ def main():
     )
     parser.add_argument(
         "--start-date",
+        default="19700101",
         help="开始日期, 格式 YYYYMMDD 或 YYYY-MM-DD (若不指定则由 mode+last_update 决定)",
     )
     parser.add_argument(
         "--end-date",
+        default=datetime.datetime.now().strftime("%Y%m%d"),
         help="结束日期, 格式 YYYYMMDD 或 YYYY-MM-DD (若不指定则默认到今天)",
     )
     parser.add_argument(

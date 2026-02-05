@@ -1,14 +1,10 @@
 # spider/fund/fund_etf_daily_em_spider.py
-import asyncio
-import random
-import warnings
-
 import akshare as ak
 import pandas as pd
 
 from ..base_spider import BaseSpider
 
-class EtfDailyEmSpider(BaseSpider):
+class EtfDailySinaSpider(BaseSpider):
     """
     ETF日行情爬虫
 
@@ -59,7 +55,6 @@ class EtfDailyEmSpider(BaseSpider):
 
         # 遍历全市场ETF
         for i, (market, code) in enumerate(etf_codes, 1):
-            # 随机等待控制请求频率
             if progress and task_id is not None:
                 progress.update(task_id, completed=i, description=f"{self.__class__.__name__} [{i}/{total}]")
             

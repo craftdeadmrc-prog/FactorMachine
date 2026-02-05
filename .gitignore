@@ -1,6 +1,7 @@
 all_factors.txt
 output.py
 *__pycache__*
-*.parquet
-spider/deprecated/*
-factor_results/*
+data
+spider/deprecated
+factor_results
+test*
