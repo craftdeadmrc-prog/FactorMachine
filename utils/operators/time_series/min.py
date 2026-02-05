@@ -1,6 +1,6 @@
-# utils/operators/cross_section/min.py
+# utils/operators/time_series/min.py
 description = {
-    "description": "计算输入序列的最小值（截面算子）",
+    "description": "计算输入序列的最小值（时序算子）",
     "args": {},
     "return": "最小值标量",
     "example": "min(low)"

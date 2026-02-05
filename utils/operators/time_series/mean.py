@@ -1,6 +1,6 @@
-# utils/operators/cross_section/mean.py
+# utils/operators/time_series/mean.py
 description = {
-    "description": "计算输入序列的算术平均值（截面算子）",
+    "description": "计算输入序列的算术平均值（时序算子）",
     "args": {},
     "return": "均值标量",
     "example": "mean(return_ratio)"

@@ -1,6 +1,6 @@
-# utils/operators/cross_section/skew.py
+# utils/operators/time_series/skew.py
 description = {
-    "description": "计算输入序列的偏度（截面算子）",
+    "description": "计算输入序列的偏度（时序算子）",
     "args": {
         "x": "输入序列"
     },

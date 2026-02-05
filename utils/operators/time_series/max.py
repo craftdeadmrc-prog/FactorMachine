@@ -1,6 +1,6 @@
-# utils/operators/cross_section/max.py
+# utils/operators/time_series/max.py
 description = {
-    "description": "计算输入序列的最大值（截面算子）",
+    "description": "计算输入序列的最大值（时序算子）",
     "args": {},
     "return": "最大值标量",
     "example": "max(high)"

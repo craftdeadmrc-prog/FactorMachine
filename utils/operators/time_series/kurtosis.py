@@ -1,6 +1,6 @@
-# utils/operators/cross_section/kurtosis.py
+# utils/operators/time_series/kurtosis.py
 description = {
-    "description": "计算输入序列的峰度（截面算子）",
+    "description": "计算输入序列的峰度（时序算子）",
     "args": {
         "x": "输入序列"
     },
