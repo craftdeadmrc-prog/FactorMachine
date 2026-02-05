@@ -9,7 +9,7 @@ description = {
     "example": "rolling_max(high, 20)"
 }
 
-def rolling_max(x, window, min_periods=1):
+def rolling_max(x, window=20, min_periods=1):
     """
     简单滚动最大值算子
     """

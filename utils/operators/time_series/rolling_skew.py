@@ -9,7 +9,7 @@ description = {
     "example": "rolling_skew(return_ratio, 60)"
 }
 
-def rolling_skew(x, window, min_periods=1):
+def rolling_skew(x, window=60, min_periods=1):
     """
     简单滚动偏度算子
     """

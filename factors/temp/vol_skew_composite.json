@@ -6,7 +6,6 @@
   },
   "info": {
     "介绍": "以 20 日波动率与收益率偏度的乘积构造的风险复合因子，用于刻画高波动且左尾厚（负偏度）场景下的风险溢价特征，近年来在尾部风险与极端收益建模中较为常见。",
-    "日期":"",
-    "计算公式": "mul(volatility_20, skew(return_ratio))"
+    "计算公式": "mul(volatility_20, rolling_skew(return_ratio, 60))"
   }
 }

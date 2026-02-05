@@ -9,7 +9,7 @@ description = {
     "example": "rolling_kurtosis(return_ratio, 60)"
 }
 
-def rolling_kurtosis(x, window, min_periods=1):
+def rolling_kurtosis(x, window=60, min_periods=1):
     """
     简单滚动峰度算子
     """

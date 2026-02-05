@@ -1,13 +1,13 @@
-# utils/operators/time_series/min.py
+# utils/operators/time_series/cummin.py
 description = {
     "description": "计算输入序列的最小值（时序算子）",
     "args": {},
     "return": "最小值标量",
-    "example": "min(low)"
+    "example": "cummin(low)"
 }
 
-def min(series):
+def cummin(x):
     """
     简单最小值算子
     """
-    return series.min()
+    return x.cummin()

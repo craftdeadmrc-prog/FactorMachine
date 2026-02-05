@@ -40,7 +40,7 @@ class FactorLoader:
         self.factor_index: Dict[str, List[str]] = self._build_factor_index()
         self.factor_deps: Dict[str, dict] = self._build_factor_dependencies()
         self.load_parquet()
-
+        self._filter_market_named_factors() 
         # 运行时缓存
         self.force_update = force_update
 
@@ -117,6 +117,26 @@ class FactorLoader:
     # ------------------------------------------------------------------
     # 依赖分析：AST 统一解析
     # ------------------------------------------------------------------
+    def _filter_market_named_factors(self) -> None:
+        """
+        过滤掉与市场数据列同名的因子定义，防止出现因子名=市场列名导致的循环依赖。
+        只改 factor_deps，不动 self.working_df 和已有结果文件。
+        """
+        if not hasattr(self, "_market_columns"):
+            # 理论上 load_parquet 已经设置过，这里只是兜底
+            self._market_columns = set(self.working_df.columns)
+
+        factor_names = set(self.factor_deps.keys())
+        conflict_names = factor_names & self._market_columns
+        if not conflict_names:
+            return
+
+        # 从因子定义表中移除这些与行情列同名的因子
+        self.factor_deps = {
+            name: info
+            for name, info in self.factor_deps.items()
+            if name not in conflict_names
+        }
 
     def _factor_dependencies(self, name: str) -> Set[str]:
         """
@@ -226,7 +246,7 @@ class FactorLoader:
         if self.working_df is None or self.working_df.empty:
             raise ValueError(f"市场数据 {self.market_type} 加载失败或为空")
         self._market_columns = set(self.working_df.columns)
-        self.factor_deps = {k: v for k, v in self.factor_deps.items() if k not in self._market_columns}
+        # NOTE: 不再在这里根据列名删因子定义，由后续依赖分析统一决策列裁剪
         self._load_all_existing_factors()
 
     def _load_all_existing_factors(self) -> None:
@@ -294,10 +314,10 @@ class FactorLoader:
         cached = self.load_factor(name)
         if cached is not None:
             return cached
-        print(f"计算因子 {name} ...")
+        print(f"计算因子: {name}")
         series = self._execute_factor(name, df_batch)
         self.save_factor(name, series)
-        print(f"因子 {name} 计算完成，已保存。")
+        print(f"因子 {name} 计算并保存完成")
         return series
 
     # ------------------------------------------------------------------
@@ -325,6 +345,9 @@ class FactorLoader:
         else:
             target_factors = set(self.factor_deps.keys())
 
+        # 在最初时，根据全部目标因子的依赖裁剪市场列
+        self._remove_unused_market_columns(target_factors)
+
         # 依赖拓扑与批次
         _, batches = self.analyze_dependencies()
         # 自定义因子时，过滤掉不相关批次
@@ -344,54 +367,56 @@ class FactorLoader:
                     loaded = self.load_factor(dep)
                     if loaded is not None:
                         self.working_df[dep] = loaded.values
-
+            print(self.working_df.columns.tolist())
             # 使用多线程执行本批次因子
             if parallel and MAX_CONCURRENCY > 1:
                 max_workers = min(max_workers or MAX_CONCURRENCY, len(batch))
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     # 收集该批次所有因子的依赖
                     # 确保所有依赖因子列都在 working_df 中（若不存在文件则加载）
+                    futures = {}
                     for name in batch:
                         all_columns = self._factor_dependencies(name) | {"code", "date"}
                         df_batch = self.working_df[list(all_columns)]
-                        future_to_name = {
-                            executor.submit(self._compute_and_save_factor, name, df_batch): name
-                        }
-                    for future in as_completed(future_to_name):
-                        name = future_to_name[future]
+                        futures[executor.submit(self._compute_and_save_factor, name, df_batch)] = name
+
+                    for future in as_completed(futures):
+                        name = futures[future]
                         series = future.result()
                         self.working_df[name] = series.values
             else:
                 # 顺序执行
                 for name in batch:
+                    all_columns = self._factor_dependencies(name) | {"code", "date"}
+                    df_batch = self.working_df[list(all_columns)]
                     series = self._compute_and_save_factor(name, df_batch)
                     self.working_df[name] = series.values
 
+    def _remove_unused_market_columns(self, target_factors: Set[str]) -> None:
+        """
+        根据目标因子的所有依赖，移除不需要的市场列
+        """
+        # 收集所有目标因子的直接依赖
+        direct_dependencies: Set[str] = set()
+        for name in target_factors:
+            direct_dependencies.update(self._factor_dependencies(name))
 
-    # ------------------------------------------------------------------
-    # 辅助方法
-    # ------------------------------------------------------------------
+        # 获取所有上游依赖因子（名字本身不一定是市场列，但其表达式中也会引用市场列）
+        all_upstream_dependencies: Set[str] = set()
+        if target_factors:
+            upstream_factors = self._get_all_dependencies(target_factors)
+            for up_name in upstream_factors:
+                all_upstream_dependencies.update(self._factor_dependencies(up_name))
 
-    def get_all_factor_names(self) -> List[str]:
-        """获取所有可用的因子名"""
-        return list(self.factor_deps.keys())
+        # 所有可能用到的市场列名
+        all_required_vars = direct_dependencies | all_upstream_dependencies
+        required_market_columns = all_required_vars & self._market_columns
 
-    def get_factor_info(self, name: str) -> Optional[dict]:
-        """获取因子的元信息"""
-        return self.factor_deps.get(name)
+        # 同时永远保留 code / date
+        required_columns = required_market_columns | {"code", "date"}
 
-    def get_category_for_factor(self, name: str) -> Optional[str]:
-        """获取因子的分类"""
-        info = self.factor_deps.get(name, {})
-        return info.get("category")
+        # 移除不需要的列
+        columns_to_drop = self._market_columns - required_columns
+        if columns_to_drop:
+            self.working_df = self.working_df.drop(columns=columns_to_drop)
 
-    def get_available_markets(self) -> List[str]:
-        """获取可用的市场类型"""
-        markets = []
-        data_dir = DATA_PATH
-        if not os.path.exists(data_dir):
-            return markets
-        for file in os.listdir(data_dir):
-            if file.endswith(".parquet"):
-                markets.append(file.replace(".parquet", ""))
-        return markets

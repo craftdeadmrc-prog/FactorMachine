@@ -7,6 +7,6 @@
   "info": {
     "介绍": "卡玛比率，通常定义为年化收益率除以绝对值最大回撤。",
     "日期":"",
-    "计算公式": "div(annual_return_ratio, max_drawdown)"
+    "计算公式": "div(rolling_annual_return_ratio, max_drawdown)"
   }
 }

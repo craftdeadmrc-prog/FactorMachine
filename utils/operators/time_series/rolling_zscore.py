@@ -10,7 +10,7 @@ description = {
     "example": "rolling_zscore(factor, 20)"
 }
 
-def rolling_zscore(x, window):
+def rolling_zscore(x, window=20):
     """
     时间序列滚动 z-score 标准化算子
     """

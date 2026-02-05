@@ -9,7 +9,7 @@ description = {
     "example": "rolling_sum(return_ratio, 5)"
 }
 
-def rolling_sum(x, window, min_periods=1):
+def rolling_sum(x, window=5, min_periods=1):
     """
     简单滚动求和算子
     """

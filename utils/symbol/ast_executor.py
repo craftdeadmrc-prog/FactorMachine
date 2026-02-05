@@ -75,9 +75,6 @@ class SafeASTExecutor:
         返回值可以是标量、Series 或 DataFrame，但若为 Series / DataFrame，
         其索引会被对齐到 df.index。
         """
-        if not expression:
-            return None
-
         try:
             tree = ast.parse(expression, mode="eval")
         except SyntaxError:
@@ -140,17 +137,17 @@ class SafeASTExecutor:
         # 判断是否为截面算子 / 时序算子（依赖文件路径）
         is_cross_section = self._is_cross_section_operator(func)
         is_time_series = self._is_time_series_operator(func)
-
         if is_cross_section:
-            return self._eval_cross_section_call(node, func, args, kwargs, df)
+            result = self._eval_cross_section_call(node, func, args, kwargs, df)
         if is_time_series:
-            return self._eval_time_series_call(node, func, args, kwargs, df)
-
-        # 普通算子：直接调用并将结果与 df.index 对齐
-        result = func(*args, **kwargs)
-        return self._align_result_to_df(
-            result, df, default_name=getattr(func, "__name__", None)
-        )
+            result = self._eval_time_series_call(node, func, args, kwargs, df)
+        else:
+            # 普通算子：直接调用并将结果与 df.index 对齐
+            result = func(*args, **kwargs)
+            result = self._align_result_to_df(
+                result, df, default_name=getattr(func, "__name__", None)
+            )
+        return result
 
     # ======================== 算子类型识别 ========================
 

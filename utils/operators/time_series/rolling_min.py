@@ -9,7 +9,7 @@ description = {
     "example": "rolling_min(low, 20)"
 }
 
-def rolling_min(x, window, min_periods=1):
+def rolling_min(x, window=20, min_periods=1):
     """
     简单滚动最小值算子
     """

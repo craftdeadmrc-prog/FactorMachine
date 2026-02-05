@@ -1,12 +1,12 @@
 {
   "description": {
-    "中文名": "年化收益率",
+    "中文名": "20日年化收益率",
     "英文名": "Annual Return Ratio",
     "变量名": "annual_return_ratio"
   },
   "info": {
     "介绍": "基于日度收益率平均值按交易日数进行年化。",
     "日期":"",
-    "计算公式": "mul(mean(return_ratio), 252)"
+    "计算公式": "mul(rolling_mean(return_ratio, 20), 252)"
   }
 }
