@@ -107,9 +107,6 @@ class SafeASTExecutor:
             if node.id in self.operators:
                 return self.operators[node.id]
             raise NameError(f"未识别的标识符: {node.id}")
-        # df = df[df['date']>=pd.Timestamp('2025-05-01')]  # 防止 date 列缺失报错
-        # # 使用前3个code的数据作为测试
-        # df = df[df['code'].isin(df['code'].unique()[:3])]
         # ---------- 函数调用 ----------
         if isinstance(node, ast.Call):
             return self._eval_call(node, df)

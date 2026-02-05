@@ -58,7 +58,9 @@ def convert_parquet_to_ashare_daily(input_file: str, output_file: str | None = N
     # 3. 处理日期格式 -> YYYYMMDD
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
-
+    # 根据code选择中间2000种股票
+    df = df[df["code"].isin(df["code"].value_counts().nlargest(1000).index)]
+    df = df[df["date"]>=pd.Timestamp("2023-01-01")]
     # 4. 处理股票代码为 6 位字符串 & 添加 market
     if "code" in df.columns:
         df["code"] = df["code"].astype(str).str.strip().str.zfill(6)

@@ -15,13 +15,11 @@ class FactorLoader:
     """因子加载与执行调度器"""
 
     def __init__(self, market_type: str,
-                 factors_dir: str = "factors",
-                 force_update: bool = False) -> None:
+                 factors_dir: str = "factors") -> None:
         """
         参数：
         - market_type: "ashare" / "fund" / "crypto"
         - factors_dir: 相对项目根目录的因子 JSON 根目录
-        - force_update: 是否强制重新计算并覆盖已有结果
         """
         # 因子定义目录
         self.factors_dir = os.path.join(factors_dir)
@@ -37,41 +35,20 @@ class FactorLoader:
         self.executor = SafeASTExecutor(self.operators)
 
         # 因子索引 & 依赖表
-        self.factor_index: Dict[str, List[str]] = self._build_factor_index()
         self.factor_deps: Dict[str, dict] = self._build_factor_dependencies()
+        self.working_df: pd.DataFrame = pd.DataFrame()
+        self._market_columns: Set[str] = set()
         self.load_parquet()
         self._filter_market_named_factors() 
         # 运行时缓存
-        self.force_update = force_update
 
         # 依赖图与批次信息（惰性计算）
-        self._dependency_graph: Optional[Dict[str, Set[str]]] = None
         self._batches: Optional[List[List[str]]] = None
         self._forward_dep: Optional[Dict[str, Set[str]]] = None
 
     # ------------------------------------------------------------------
     # 因子索引与元信息
     # ------------------------------------------------------------------
-
-    def _build_factor_index(self) -> Dict[str, List[str]]:
-        """
-        扫描 factors_dir 下所有 .json，按一级目录名构建索引
-        """
-        index: Dict[str, List[str]] = {}
-        base = Path(self.factors_dir)
-
-        if not base.exists():
-            return index
-
-        for root, _, files in os.walk(base):
-            for file in files:
-                if not file.endswith(".json"):
-                    continue
-                p = Path(root) / file
-                rel = p.relative_to(base)
-                category = rel.parts[0] if len(rel.parts) > 1 else ""
-                index.setdefault(category, []).append(str(p))
-        return index
 
     def _build_factor_dependencies(self) -> Dict[str, dict]:
         """
@@ -164,8 +141,6 @@ class FactorLoader:
         - forward_dep: factor -> {它依赖的“前置因子”}
         - 依赖关系完全基于 AST 中的变量名，再与 factor_deps 键集求交
         """
-        if self._dependency_graph is not None and self._batches is not None:
-            return self._dependency_graph, self._batches
         factor_names = set(self.factor_deps.keys())
         # 正向依赖：仅保留“前置因子”，不含市场原始列
         forward_dep: Dict[str, Set[str]] = {}
@@ -212,7 +187,6 @@ class FactorLoader:
             # 这里仍然抛出错误，保持原逻辑语义
             raise ValueError(f"无法生成完整的依赖拓扑，剩余因子: {remaining}")
 
-        self._dependency_graph = forward_dep
         self._batches = batches
         self._forward_dep = forward_dep
         return forward_dep, batches
@@ -246,46 +220,13 @@ class FactorLoader:
         if self.working_df is None or self.working_df.empty:
             raise ValueError(f"市场数据 {self.market_type} 加载失败或为空")
         self._market_columns = set(self.working_df.columns)
-        # NOTE: 不再在这里根据列名删因子定义，由后续依赖分析统一决策列裁剪
-        self._load_all_existing_factors()
-
-    def _load_all_existing_factors(self) -> None:
-        """加载所有已存在的因子文件到 working_df"""
-        if not os.path.isdir(self.factor_results_dir):
-            return
-
-        for file_name in os.listdir(self.factor_results_dir):
-            if not file_name.endswith(".parquet"):
-                continue
-            parts = file_name.split("_")
-            if len(parts) >= 2:
-                factor_name = parts[0]
-                if factor_name in self.factor_deps and factor_name not in self.working_df.columns:
-                    loaded = self.load_factor(factor_name)
-                    if loaded is not None:
-                        # 假设索引对齐
-                        self.working_df[factor_name] = loaded.values
 
     def load_factor(self, name: str) -> Optional[pd.Series]:
-        if self.force_update:
-            return None
-
         # 因子表名统一为 {market_type}_{factor_name}
-        factor_df = load_dataframe(f"{self.market_type}_{name}")
+        factor_df = load_dataframe(f"{self.market_type}_{name}", self.factor_results_dir)
         if factor_df is None or factor_df.empty:
             return None
-
-        if isinstance(factor_df, pd.DataFrame):
-            if factor_df.shape[1] == 1:
-                series = factor_df.iloc[:, 0]
-            elif name in factor_df.columns:
-                series = factor_df[name]
-            else:
-                raise ValueError(f"因子 {name} 文件列不唯一且不包含列名 {name}")
-        else:
-            series = factor_df
-
-        return series
+        return factor_df
 
     def save_factor(self, name: str, series: pd.Series) -> str:
         table_name = f"{self.market_type}_{name}"
@@ -311,9 +252,6 @@ class FactorLoader:
 
     def _compute_and_save_factor(self, name: str, df_batch: pd.DataFrame) -> pd.Series:
         """计算并保存因子结果"""
-        cached = self.load_factor(name)
-        if cached is not None:
-            return cached
         print(f"计算因子: {name}")
         series = self._execute_factor(name, df_batch)
         self.save_factor(name, series)
@@ -362,12 +300,10 @@ class FactorLoader:
             batch_deps: Set[str] = set()
             for name in batch:
                 batch_deps |= self._factor_dependencies(name)
+            working_df_cols = self.working_df.columns.tolist()
             for dep in batch_deps:
-                if dep not in self.working_df.columns:
-                    loaded = self.load_factor(dep)
-                    if loaded is not None:
-                        self.working_df[dep] = loaded.values
-            print(self.working_df.columns.tolist())
+                if dep not in working_df_cols:
+                    self.working_df[dep] = self.load_factor(dep).values
             # 使用多线程执行本批次因子
             if parallel and MAX_CONCURRENCY > 1:
                 max_workers = min(max_workers or MAX_CONCURRENCY, len(batch))
@@ -382,15 +318,13 @@ class FactorLoader:
 
                     for future in as_completed(futures):
                         name = futures[future]
-                        series = future.result()
-                        self.working_df[name] = series.values
+                        future.result()
             else:
                 # 顺序执行
                 for name in batch:
                     all_columns = self._factor_dependencies(name) | {"code", "date"}
                     df_batch = self.working_df[list(all_columns)]
-                    series = self._compute_and_save_factor(name, df_batch)
-                    self.working_df[name] = series.values
+                    self._compute_and_save_factor(name, df_batch)
 
     def _remove_unused_market_columns(self, target_factors: Set[str]) -> None:
         """
