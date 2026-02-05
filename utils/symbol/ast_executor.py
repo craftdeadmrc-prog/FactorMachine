@@ -66,6 +66,8 @@ class SafeASTExecutor:
 
     def __init__(self, operators: Dict[str, Any]) -> None:
         self.operators = operators
+        # 算子结果缓存：按 (算子名, 分组类型, 参数) 键存储
+        self._operator_cache: Dict[tuple, Any] = {}
 
     # ======================== 对外主接口 ========================
 
@@ -79,6 +81,8 @@ class SafeASTExecutor:
             tree = ast.parse(expression, mode="eval")
         except SyntaxError:
             return None
+        # 每次执行清空算子缓存，避免跨表达式污染
+        self._operator_cache.clear()
         return self._eval(tree.body, df)
 
     # ======================== AST 递归求值 ========================
@@ -134,16 +138,110 @@ class SafeASTExecutor:
         # 判断是否为截面算子 / 时序算子（依赖文件路径）
         is_cross_section = self._is_cross_section_operator(func)
         is_time_series = self._is_time_series_operator(func)
-        if is_cross_section:
-            result = self._eval_cross_section_call(node, func, args, kwargs, df)
-        if is_time_series:
-            result = self._eval_time_series_call(node, func, args, kwargs, df)
+
+        # 对截面/时序算子使用缓存，其余保持原逻辑
+        secondary_group_key = None
+        if (
+            node.args
+            and isinstance(node.args[-1], ast.Constant)
+            and isinstance(node.args[-1].value, str)
+        ):
+            secondary_group_key = node.args[-1].value
+
+        if is_cross_section or is_time_series:
+            result = self._cached_operator_call(
+                func,
+                args,
+                kwargs,
+                df,
+                is_cross_section=is_cross_section,
+                is_time_series=is_time_series,
+                secondary_group_key=secondary_group_key,
+                node=node,
+            )
         else:
             # 普通算子：直接调用并将结果与 df.index 对齐
             result = func(*args, **kwargs)
             result = self._align_result_to_df(
                 result, df, default_name=getattr(func, "__name__", None)
             )
+        return result
+
+    # ======================== 算子缓存键与缓存调用 ========================
+
+    def _generate_operator_key(
+        self,
+        operator_name: str,
+        is_cross_section: bool,
+        is_time_series: bool,
+        secondary_group_key: Optional[str],
+        args: list,
+        kwargs: dict,
+    ) -> tuple:
+        """
+        生成算子缓存键：
+        只使用“参数类型 + Series 名称信息”作为签名，
+        不直接用值，避免巨大的哈希开销。
+        """
+        args_signature = []
+        for arg in args:
+            if isinstance(arg, pd.Series):
+                args_signature.append(("SERIES", getattr(arg, "name", None)))
+            else:
+                args_signature.append(type(arg).__name__)
+
+        kwargs_signature = []
+        for k, v in kwargs.items():
+            if isinstance(v, pd.Series):
+                kwargs_signature.append(
+                    (k, "SERIES", getattr(v, "name", None))
+                )
+            else:
+                kwargs_signature.append((k, type(v).__name__))
+
+        return (
+            operator_name,
+            is_cross_section,
+            is_time_series,
+            secondary_group_key,
+            tuple(args_signature),
+            tuple(kwargs_signature),
+        )
+
+    def _cached_operator_call(
+        self,
+        operator: Any,
+        args: list,
+        kwargs: dict,
+        df: pd.DataFrame,
+        is_cross_section: bool,
+        is_time_series: bool,
+        secondary_group_key: Optional[str],
+        node: Optional[ast.Call] = None,
+    ) -> Any:
+        """
+        带缓存的算子调用：
+        - 通过算子名 + 类型 + 分组键 + 参数签名 做缓存；
+        - 相同 df 上若多次出现同一调用，直接复用结果。
+        """
+        op_name = getattr(operator, "__name__", repr(operator))
+        cache_key = self._generate_operator_key(
+            op_name, is_cross_section, is_time_series, secondary_group_key, args, kwargs
+        )
+
+        if cache_key in self._operator_cache:
+            return self._operator_cache[cache_key]
+
+        # 首次执行：走原有分组逻辑
+        if is_cross_section:
+            result = self._eval_cross_section_call(node, operator, args, kwargs, df)
+        elif is_time_series:
+            result = self._eval_time_series_call(node, operator, args, kwargs, df)
+        else:
+            result = operator(*args, **kwargs)
+            result = self._align_result_to_df(result, df, op_name)
+
+        self._operator_cache[cache_key] = result
         return result
 
     # ======================== 算子类型识别 ========================
