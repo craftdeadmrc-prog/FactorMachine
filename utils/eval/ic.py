@@ -90,8 +90,7 @@ def calculate_ic_summary(ic_pd: pd.DataFrame) -> pd.DataFrame:
     参数
     ----
     ic_pd : pd.DataFrame
-        IC 时间序列，索引为日期，列为各个因子的IC值（列名如"ic_ma_26"）。
-
+    
     返回
     ----
     pd.DataFrame

@@ -10,21 +10,6 @@ from utils.eval.ic import calculate_ic, calculate_ic_summary
 from core.storage import load_dataframe, save_dataframe
 
 class FactorEvaluator:
-    """
-    单因子评估器（严格单因子、单入口）。
-
-    只做：
-    - 基础数据加载
-    - 单因子加载
-    - 标签构造（未来收益）
-    - 面板转换
-    - IC 计算与统计
-    - 结果写入 parquet
-
-    不做：
-    - 多因子循环（由外部多因子脚本调用）
-    - 任意形式的回测（回测必须走 utils/backtest 模块）
-    """
 
     def __init__(self, market_type: str) -> None:
         self.market_type = market_type
@@ -38,29 +23,6 @@ class FactorEvaluator:
         horizon: int = 1,
         log_return: bool = True,
     ) -> pd.DataFrame:
-        """
-        评估单个因子在指定 horizon 上的表现（仅做 IC 分析）。
-
-        参数
-        ----
-        factors : List[str]
-            因子名称。
-        horizon : int, default 1
-            预测期（未来收益的 horizon）。
-        log_return : bool, default True
-            标签是否使用对数收益。
-        output_dir : str, default "factor_eval"
-            评估结果 parquet 输出目录。
-
-        返回
-        ----
-        dict
-            {
-                "factor_name": str,
-                "horizon": int,
-                "ic_summary": pd.DataFrame
-            }
-        """
         if custom_factors:
             factors = set(custom_factors)
         else:
