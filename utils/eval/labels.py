@@ -8,7 +8,7 @@ import pandas as pd
 
 
 def build_forward_return_label(
-    data_df: pd.DataFrame,
+    df: pd.DataFrame,
     horizon: int = 1,
     log_return: bool = False,
 ) -> pd.Series:
@@ -27,8 +27,6 @@ def build_forward_return_label(
         pd.Series
             与 data_df 行顺序一一对应的标签序列。
     """
-    # 按股票和日期排序，保证时间顺序正确
-    df = data_df.sort_values(["code", "date"])
 
     def _calc_group(gp: pd.DataFrame) -> pd.Series:
         px = gp["close"]
@@ -36,9 +34,9 @@ def build_forward_return_label(
         if log_return:
             return np.log(px_shift / px)
         return (px_shift - px) / px
-
+    series = df.groupby("code", group_keys=False).apply(_calc_group)
     # 直接 groupby + apply，group_keys=False 保持扁平索引
-    return df.groupby("code", group_keys=False).apply(_calc_group)
+    return series.to_frame("label")
 
 
 def build_forward_vol_label(

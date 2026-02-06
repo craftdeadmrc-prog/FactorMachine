@@ -20,9 +20,6 @@ def load_operators(operators_dir: str) -> Dict[str, Any]:
     operators: Dict[str, Any] = {}
     base = Path(operators_dir)
 
-    if not base.exists():
-        return operators
-
     for root, _, files in os.walk(base):
         for file in files:
             if not file.endswith(".py") or file.startswith("__"):

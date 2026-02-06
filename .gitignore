@@ -4,4 +4,5 @@ output.py
 data
 spider/deprecated
 factor_results
+factor_eval
 test*

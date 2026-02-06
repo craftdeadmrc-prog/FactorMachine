@@ -6,23 +6,21 @@ from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from core.config import DATA_PATH, MAX_CONCURRENCY
+from core.config import MAX_CONCURRENCY
 from core.storage import load_dataframe, save_dataframe
 from utils.symbol.ast_executor import load_operators, SafeASTExecutor
 
 
-class FactorLoader:
+class FactorCalculator:
     """因子加载与执行调度器"""
 
-    def __init__(self, market_type: str,
-                 factors_dir: str = "factors") -> None:
+    def __init__(self, market_type: str) -> None:
         """
         参数：
         - market_type: "ashare" / "fund" / "crypto"
-        - factors_dir: 相对项目根目录的因子 JSON 根目录
         """
         # 因子定义目录
-        self.factors_dir = os.path.join(factors_dir)
+        self.factors_dir = os.path.join("factors")
 
         # 原始行情数据文件: DATA_PATH/{market_type}.parquet
         self.market_type = market_type
@@ -59,9 +57,6 @@ class FactorLoader:
         """
         deps: Dict[str, dict] = {}
         base = Path(self.factors_dir)
-
-        if not base.exists():
-            return deps
 
         for root, _, files in os.walk(base):
             for file in files:
@@ -221,7 +216,7 @@ class FactorLoader:
             raise ValueError(f"市场数据 {self.market_type} 加载失败或为空")
         self._market_columns = set(self.working_df.columns)
 
-    def load_factor(self, name: str) -> Optional[pd.Series]:
+    def load_factor(self, name: str) -> pd.DataFrame:
         # 因子表名统一为 {market_type}_{factor_name}
         factor_df = load_dataframe(f"{self.market_type}_{name}", self.factor_results_dir)
         if factor_df is None or factor_df.empty:

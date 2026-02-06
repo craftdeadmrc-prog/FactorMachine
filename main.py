@@ -6,7 +6,7 @@ import sys
 
 from core.scheduler import run_spiders
 from core.config import MAX_CONCURRENCY
-from utils.symbol.loader import FactorLoader
+from utils.symbol.factor_calculator import FactorCalculator
 import datetime
 
 def get_available_markets() -> list:
@@ -157,9 +157,8 @@ def main():
     # 因子计算：对每个市场基于其合并后的 parquet 计算因子
     for market in markets:
         print(f"\n=== 开始计算 {market} 市场因子 ===")
-        # FactorLoader 会自动从 DATA_PATH/{market}.parquet 读取数据
-        loader = FactorLoader(market_type=market)
-        loader.run_factors(max_workers=args.concurrency)
+        loader = FactorCalculator(market_type=market)
+        loader.run_factors(['ma_26'],max_workers=args.concurrency)
         print(f"=== {market} 市场因子计算完成 ===")
 
 

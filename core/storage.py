@@ -18,18 +18,14 @@ def _get_config_path(table_name: str, path=DATA_PATH) -> str:
 def load_table_config(table_name: str, path=DATA_PATH) -> dict:
     path = _get_config_path(table_name, path)
     if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+        return json.load(open(path, "r", encoding="utf-8"))
+    else:
+        return {}
 
 
 def save_table_config(table_name: str, config: dict, path=DATA_PATH):
     path = _get_config_path(table_name, path)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False)
+    json.dump(config, open(path, "w", encoding="utf-8"), ensure_ascii=False)
 
 
 def get_last_update_date(table_name: str, path=DATA_PATH):
@@ -56,7 +52,7 @@ def save_dataframe(df: pd.DataFrame, table_name: str, path=DATA_PATH):
     """
     if df is None or df.empty:
         return
-
+    os.makedirs(path, exist_ok=True)
     config = load_table_config(table_name, path)
     table_conf = config.get(table_name, {})
     col_types = {}
@@ -83,7 +79,6 @@ def save_dataframe(df: pd.DataFrame, table_name: str, path=DATA_PATH):
     config[table_name] = table_conf
 
     config["last_update"] = normalize_date_str(date.today().isoformat())
-
     save_table_config(table_name, config, path)
 
     file_path = os.path.join(path, f"{table_name}.parquet")
