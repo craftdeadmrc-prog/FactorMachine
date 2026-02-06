@@ -1,5 +1,4 @@
 # utils/eval/evaluator.py
-# 单因子评估模块（只负责 IC 相关统计与结果存储）
 import os
 from pathlib import Path
 from typing import Optional,List
@@ -29,12 +28,9 @@ class FactorEvaluator:
 
     def __init__(self, market_type: str) -> None:
         self.market_type = market_type
-        # factor_eval/ 存因子 parquet
         self.factor_results_dir = os.path.join("factor_results")
         self.factor_eval_dir = os.path.join("factor_eval")
         os.makedirs(self.factor_eval_dir, exist_ok=True)
-
-    # ---------- 单因子评估主流程 ----------
 
     def evaluate_factor(
         self,
@@ -96,10 +92,7 @@ class FactorEvaluator:
         ).dropna()
         ic_summary = calculate_ic_summary(ic)
         print(ic_summary)
-        # 7. 保存报告到 parquet（每个因子一个文件，便于多因子脚本汇总）
-        # 统一由 core.storage 控制压缩等细节
         out_table_name = f"{self.market_type}_factors"
         save_dataframe(ic_summary,out_table_name, self.factor_eval_dir)
 
-        # 8. 返回结果字典，方便上层直接使用
         return ic_summary

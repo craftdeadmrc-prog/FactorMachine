@@ -1,12 +1,10 @@
 # utils/eval/ic.py
-# IC 计算模块（纯计算逻辑，不涉及 IO 或业务调度）
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 from scipy import stats
-from typing import Dict, Any
 
 
 def calculate_ic(
@@ -76,10 +74,6 @@ def calculate_ic(
         ic_columns = [f"ic_{factor}" for factor in factors]
         ic_df = pd.DataFrame(columns=ic_columns)
     return ic_df
-
-
-import pandas as pd
-import numpy as np
 
 def calculate_ic_summary(ic_pd: pd.DataFrame) -> pd.DataFrame:
     """
