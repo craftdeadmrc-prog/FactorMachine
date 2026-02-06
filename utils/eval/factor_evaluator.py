@@ -51,7 +51,7 @@ class FactorEvaluator:
             因子名称。
         horizon : int, default 1
             预测期（未来收益的 horizon）。
-        log_return : bool, default False
+        log_return : bool, default True
             标签是否使用对数收益。
         output_dir : str, default "factor_eval"
             评估结果 parquet 输出目录。
