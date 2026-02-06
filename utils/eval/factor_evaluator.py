@@ -1,13 +1,15 @@
-# utils/eval/evaluator.py
+# utils/eval/factor_evaluator.py
 import os
 from pathlib import Path
-from typing import Optional,List
+from typing import Optional, List
 
 import pandas as pd
 
 from utils.eval.labels import build_forward_return_label
-from utils.eval.ic import calculate_ic, calculate_ic_summary
+from utils.eval.ic import calculate_ic, calculate_ic_summary, calculate_monotonicity
+from utils.eval.outlier import cap_outliers
 from core.storage import load_dataframe, save_dataframe
+
 
 class FactorEvaluator:
 
@@ -32,7 +34,7 @@ class FactorEvaluator:
                 for file in files:
                     if not file.endswith(".parquet"):
                         continue
-                    factors.append(str.removesuffix(file,".parquet"))
+                    factors.append(str.removesuffix(file, ".parquet"))
         # 1. 基础数据
         base_data = load_dataframe(self.market_type)[["date", "code", "close"]]
         # 2. 标签（未来收益）
@@ -47,14 +49,26 @@ class FactorEvaluator:
         for factor in factors:
             factor = load_dataframe(factor, self.factor_results_dir)
             panel = panel.join(factor)
-        # 5. 计算 IC 序列及汇总
+        # 4. 异常值处理
+        panel = cap_outliers(panel)
+        # 5. 计算 IC 序列
         ic = calculate_ic(
             panel=panel,
             method="spearman",
         ).dropna()
+        # 6. 计算 IC 汇总
         ic_summary = calculate_ic_summary(ic)
-        print(ic_summary)
-        out_table_name = f"{self.market_type}_factors"
-        save_dataframe(ic_summary,out_table_name, self.factor_eval_dir)
-
+        # 7. 计算单调性
+        monotonicity = calculate_monotonicity(panel)
+        monotonicity.columns = [f"ic_{col}_monotonicity" for col in monotonicity.columns]
+        ic_summary = ic_summary.join(monotonicity)
+        # 输出结果
+        # out_table_name = f"{self.market_type}_factors"
+        # save_dataframe(ic_summary, out_table_name, self.factor_eval_dir)
+        for ic_col in factors:
+            ic_col = str.removeprefix(ic_col,f"{self.market_type}_")
+            out_table_name = f"{self.market_type}_factors_{ic_col}"
+            df = ic_summary[[f"ic_{ic_col}_mean",f"ic_{ic_col}_std",f"ic_{ic_col}_t_value",f"ic_{ic_col}_ic_ir",f"ic_{ic_col}_positive_ratio",f"ic_{ic_col}_monotonicity"]]
+            save_dataframe(df, out_table_name, self.factor_eval_dir)
+            
         return ic_summary

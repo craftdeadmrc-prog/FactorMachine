@@ -66,5 +66,6 @@ def build_forward_vol_label(
         ret = np.log(px / px.shift(1))
         vol = ret.rolling(window=window, min_periods=1).std()
         return vol.shift(-horizon)
-
-    return df.groupby("code", group_keys=False).apply(_calc_group)
+    series = df.groupby("code", group_keys=False).apply(_calc_group)
+    # 直接 groupby + apply，group_keys=False 保持扁平索引
+    return series.to_frame("label")

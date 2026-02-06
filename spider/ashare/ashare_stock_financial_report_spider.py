@@ -14,7 +14,6 @@ class StockFinancialReportSpider(BaseSpider):
     table_name = "ashare_stock_financial_report"
 
     _COLUMN_MAP = {
-        {
             "资产负债表": {
                 "报告日": "date",
                 "货币资金": "cash_and_cash_equivalents",
@@ -152,7 +151,6 @@ class StockFinancialReportSpider(BaseSpider):
                 "期末现金及现金等价物余额": "cash_and_equivalents_at_end"
             }
         }
-    }
 
     symbol_map = {
         "资产负债表":"balance_sheet",

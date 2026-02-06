@@ -100,11 +100,13 @@ def main():
     )
     parser.add_argument(
         "--factors",
+        default=False,
         action="store_true",          # 是否“只计算因子”
         help="单独计算因子（不再重新爬取）",
     )
     parser.add_argument(
         "--merge",
+        default=False,
         action="store_true",
         help="只执行合并（不跑爬虫；建议与 --factors 配合使用）",
     )
@@ -153,13 +155,13 @@ def main():
             merge_func = dynamic_import_merge(market)
             merge_func()
             print(f"=== {market} 市场合并完成 ===")
-
-    # 因子计算：对每个市场基于其合并后的 parquet 计算因子
-    for market in markets:
-        print(f"\n=== 开始计算 {market} 市场因子 ===")
-        loader = FactorCalculator(market_type=market)
-        loader.run_factors(['ma_26'],max_workers=args.concurrency)
-        print(f"=== {market} 市场因子计算完成 ===")
+    if args.factors:
+        # 因子计算：对每个市场基于其合并后的 parquet 计算因子
+        for market in markets:
+            print(f"\n=== 开始计算 {market} 市场因子 ===")
+            loader = FactorCalculator(market_type=market)
+            loader.run_factors(['volatility_asymmetry'],max_workers=args.concurrency)
+            print(f"=== {market} 市场因子计算完成 ===")
 
 
 if __name__ == "__main__":
