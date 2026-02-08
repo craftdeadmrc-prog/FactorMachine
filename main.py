@@ -160,7 +160,7 @@ def main():
         for market in markets:
             print(f"\n=== 开始计算 {market} 市场因子 ===")
             loader = FactorCalculator(market_type=market)
-            loader.run_factors(['volatility_asymmetry'],max_workers=args.concurrency)
+            loader.run_factors(max_workers=args.concurrency)
             print(f"=== {market} 市场因子计算完成 ===")
 
 

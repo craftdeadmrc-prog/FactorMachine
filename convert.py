@@ -96,7 +96,9 @@ def convert_parquet_to_ashare_daily(input_file: str, output_file: str | None = N
         stem = Path(input_file).stem
         output_file = f"{stem}_ashare.parquet"
     df.fillna(value=pd.NA, inplace=True)
-    df.to_parquet(output_file, index=False)
+    from core.storage import save_dataframe
+    save_dataframe(df,output_file)
+    # df.to_parquet(output_file, index=False)
     print(f"转换完成: {input_file} -> {output_file}")
     print("预览前几行：")
     print(df.head())

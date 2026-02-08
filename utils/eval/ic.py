@@ -59,7 +59,6 @@ def calculate_ic(
     if results:
         ic_df = pd.DataFrame(results)
         ic_df.set_index("date", inplace=True)
-        ic_df.index.name = None
     else:
         ic_columns = [f"ic_{factor}" for factor in factors]
         ic_df = pd.DataFrame(columns=ic_columns)
@@ -228,3 +227,87 @@ def calculate_monotonicity(panel: pd.DataFrame, num_groups: int = 5) -> pd.DataF
     monotonicity_df.index.name = None
 
     return monotonicity_df
+
+
+def neutralize_factors(
+    panel: pd.DataFrame,
+    market_value_col: str = "total_market_value",
+    industry_col: str = "industry",
+) -> pd.DataFrame:
+    """
+    对面板中的因子做行业内市值中性化处理（可供其它 IC 计算流程调用）。
+
+    在每个截面 (date) 内，再按行业列分组，在每个 (date, industry) 组中：
+    使用对数市值 log(market_value_col) 对因子做一元线性回归，
+    返回回归残差作为中性化后的因子值，从而同时控制行业和市值暴露。
+
+    参数
+    ----
+    panel : pd.DataFrame
+        包含列:
+            - date
+            - code
+            - 若干因子列
+            - 行业列（默认为 "industry"）
+            - 市值列（"total_market_value" 或 "tradable_market_value"）
+    market_value_col : str, 默认 "total_market_value"
+        用于中性化的市值列名。
+        通常使用 "total_market_value"；
+        仅在主动测试流通市值对部分因子的效果时，调用方显式传入 "tradable_market_value"。
+    industry_col : str, 默认 "industry"
+        行业类别列名。
+
+    返回
+    ----
+    pd.DataFrame
+        仅包含中性化后因子列的 DataFrame，索引与输入 panel 对齐。
+    """
+    if market_value_col not in panel.columns or industry_col not in panel.columns:
+        return panel
+
+    # 因子列：排除基础标识列、标签列、行业列、市值列
+    factor_cols = [
+        col
+        for col in panel.columns
+        if col not in ["date", "code", "label", industry_col, market_value_col]
+    ]
+    if not factor_cols:
+        # 没有任何可中性化的因子列时，直接返回原 panel 副本
+        return panel
+
+    # 按日期截面处理
+    for date, group in panel.groupby("date"):
+        if len(group) < 2:
+            # 截面样本过少无法回归，跳过该日
+            continue
+
+        # 在截面内按行业分组
+        for _, industry_group in group.groupby(industry_col):
+            if len(industry_group) < 2:
+                # 行业组样本过少无法回归，跳过该组
+                continue
+
+            # 市值必须为正，才能取对数
+            mv_values = industry_group[market_value_col].to_numpy(dtype=float)
+            if np.any(mv_values <= 0.0):
+                # 若该行业组存在非正市值，跳过该组
+                continue
+
+            # 设计矩阵：常数项 + log(市值)
+            x_log_mv = np.log(mv_values)
+            X = np.column_stack([np.ones_like(x_log_mv, dtype=float), x_log_mv])
+
+            # 对每个因子做一元线性回归，残差即为中性化后的因子值
+            for factor in factor_cols:
+                y = industry_group[factor].to_numpy(dtype=float)
+                # 若该因子在该组内全部相同，则残差为 0，中性化后没有信息，直接赋值为 0
+                if np.all(np.isnan(y)) or np.all(y == y[0]):
+                    residual = np.full_like(y, np.nan, dtype=float)
+                else:
+                    beta, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+                    fitted = X @ beta
+                    residual = y - fitted
+
+                panel.loc[industry_group.index, factor] = residual
+
+    return panel

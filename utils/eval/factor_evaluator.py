@@ -6,7 +6,8 @@ from typing import Optional, List
 import pandas as pd
 
 from utils.eval.labels import build_forward_return_label
-from utils.eval.ic import calculate_ic, calculate_ic_summary, calculate_monotonicity
+from utils.eval.ic import calculate_ic, calculate_ic_summary, calculate_monotonicity, neutralize_factors
+from utils.eval.factor_selection import orthogonalize_factors, filter_ic_by_corr_hierarchical
 from utils.eval.outlier import cap_outliers
 from core.storage import load_dataframe, save_dataframe
 
@@ -56,8 +57,15 @@ class FactorEvaluator:
             panel=panel,
             method="spearman",
         ).dropna()
+        ic = neutralize_factors(ic)
+
+        # 1. 因子间正交化
+        ic = orthogonalize_factors(ic)
+        # 3. 基于 IC 相关性的层次聚类去重
+        ic = filter_ic_by_corr_hierarchical(ic)
         # 6. 计算 IC 汇总
         ic_summary = calculate_ic_summary(ic)
+        
         # 7. 计算单调性
         monotonicity = calculate_monotonicity(panel)
         monotonicity.columns = [f"ic_{col}_monotonicity" for col in monotonicity.columns]
