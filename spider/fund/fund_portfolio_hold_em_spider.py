@@ -1,14 +1,17 @@
-# spider/fund/fund_portfolio_hold_em_spider.py
 import asyncio
-import random
-import warnings
+import logging
 import re
+from datetime import datetime, date
+from typing import List, Dict
 
-import akshare as ak
 import pandas as pd
+import akshare as ak
 
 from ..base_spider import BaseSpider
-from tqdm import tqdm
+from core.storage import save_dataframe, load_dataframe
+from core.proxy import proxy_pool
+
+logger = logging.getLogger(__name__)
 
 
 class FundPortfolioHoldEmSpider(BaseSpider):
@@ -18,39 +21,47 @@ class FundPortfolioHoldEmSpider(BaseSpider):
     目标：写入表 fund_portfolio_hold
     数据源：天天基金网-基金档案-投资组合 (ak.fund_portfolio_hold_em)
     """
-    resource = "eastmoney"
+    resource = "fund_eastmoney"
     table_name = "fund_portfolio_hold"
+    description = "获取ETF基金持仓数据（股票持仓明细）"
 
-    # -------------------
-    # 基础工具方法
-    # -------------------
+    def __init__(self, tasks: List[Dict] = None, update: bool = False):
+        super().__init__(tasks, update)
 
-    def _normalize_quarter(self, s: str = None) -> str:
+    # ---------- 工具方法 ----------
+    def _quarter_to_date(self, s: str):
         """
-        将季度字符串标准化为 YYYYQX 格式
-        例如："2024年1季度股票投资明细" -> "2024Q1"
+        将季度字符串转换为季度第一天的日期字符串 "YYYY-MM-DD"
+        例如："2024年1季度股票投资明细" -> "2024-01-01"
         """
-        if not s:
+        if not s or not isinstance(s, str):
             return None
-        match = re.search(r"(\d{4})年(\d+)季度", str(s))
+        match = re.search(r"(\d{4})年(\d+)季度", s)
         if match:
             year = match.group(1)
             quarter = match.group(2)
-            return f"{year}Q{quarter}"
-        return s
-    def _rename_columns(self, df: pd.DataFrame, fund_code: str) -> pd.DataFrame:
+            month = (int(quarter) - 1) * 3 + 1
+            return pd.to_datetime(f"{year}-{month:02d}-01")
+        return None
+
+    def _rename_columns(self, df: pd.DataFrame, symbol: str, market: str) -> pd.DataFrame:
         """
         统一字段命名和格式：
-        - code: 基金代码
-        - quarter: 标准化季度
+        - symbol: 基金代码
+        - date: 季度第一天的日期（datetime类型）
         - stock_id: 股票代码
         - stock_name: 股票名称
         - holding_ratio: 占净值比例（%）
         - holding_number: 持股数（万股）
         - holding_value: 持仓市值（万元）
-        - 序号列直接丢弃
+        序号列直接丢弃
         """
-        df = df.drop(columns=["序号"])
+        if df.empty:
+            return df
+
+        # 丢弃序号列（如果存在）
+        if "序号" in df.columns:
+            df = df.drop(columns=["序号"])
 
         rename_map = {
             "股票代码": "stock_id",
@@ -61,57 +72,176 @@ class FundPortfolioHoldEmSpider(BaseSpider):
             "季度": "quarter",
         }
         df = df.rename(columns=rename_map)
-        df["date"] = pd.to_datetime(df["date"])
 
+        # 添加基金代码和市场字段
+        df["symbol"] = symbol
+        df["market"] = market
+
+        # 将季度转换为日期
         if "quarter" in df.columns:
-            df["quarter"] = df["quarter"].apply(self._normalize_quarter)
+            df["date"] = df["quarter"].apply(self._quarter_to_date)
+            df = df.drop(columns=["quarter"])
 
-        df["code"] = fund_code
-
+        # 将数值列转为数字类型
         for col in ["holding_ratio", "holding_number", "holding_value"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df.sort_values(["code", "date", "holding_ratio"]).reset_index(drop=True)
+
+        # 按 symbol、date 排序
+        df = df.sort_values(["symbol", "date"], na_position="last").reset_index(drop=True)
         return df
 
-    # -------------------
-    # 主运行逻辑
-    # -------------------
-    async def run(self, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+    # ---------- check ----------
+    def check(self):
         """
-        扫描全市场 ETF 基金持仓数据并返回合并后的 DataFrame
-
-        参数:
-            start_date, end_date: 字符串日期，如 "2020" 或 "2020-01"；
-                                  用于限定年份区间（只用前 4 位年份）
-
-        注意：
-        - ak.fund_portfolio_hold_em 接口参数 date 是年份（如 "2024"）
-        - 日期范围在本地通过 quarter 的年份做过滤
+        检查数据库中已有数据，根据最新数据年份决定任务是否需要抓取以及调整年份范围。
+        逻辑：
+        1. 如果数据库中该基金已有今年的数据，则从 tasks 中剔除该任务。
+        2. 否则，保留任务，并将起始年份调整为最新年份 + 1（避免重复），结束年份设为当前年份。
         """
+        if not self.tasks:
+            return
 
-        etf_codes = self.get_one_market("fund")
-        all_dfs = []
-        start_year = int(start_date[:4])
-        end_year = int(end_date[:4])
-        for market,etf_code in tqdm(etf_codes, desc="Fetching ETF portfolio data"):
-            await asyncio.sleep(random.randint(1, 3))
-            for year in range(start_year, end_year):
+        current_year = datetime.now().year
+        new_tasks = []
+
+        for task in self.tasks:
+            symbol = task.get("symbol")
+            if not symbol:
+                logger.warning(f"任务缺少 symbol: {task}，跳过")
+                continue
+
+            # 查询该基金在数据库中的最大日期
+            sql = f"""
+                SELECT MAX(date) as max_date
+                FROM {self.table_name}
+                WHERE symbol = '{symbol}'
+            """
+            try:
+                df = load_dataframe(sql, market=self.market)  # 需要从任务中获取 market，这里使用 self.market（已在基类中定义）
+                if df.empty or df.iloc[0]["max_date"] is None:
+                    # 无历史数据，保留原任务
+                    new_tasks.append(task)
+                    continue
+
+                max_date = df.iloc[0]["max_date"]
+                if isinstance(max_date, (date, datetime)):
+                    max_year = max_date.year
+                else:
+                    # 若为字符串，尝试解析
+                    max_year = pd.to_datetime(max_date).year
+
+                if max_year >= current_year:
+                    # 已有今年或更新的数据，跳过该任务
+                    logger.info(f"{symbol} 已有 {max_year} 年数据（当前年份 {current_year}），跳过抓取")
+                    continue
+                else:
+                    # 需要抓取，调整年份范围
+                    # 提取原任务的起止日期（datetime 对象）
+                    start_date = task.get("start_date")
+                    end_date = task.get("end_date")
+                    if start_date is None or end_date is None:
+                        # 如果任务中没有日期范围，则默认从最新年份+1到今年
+                        start_date = datetime(max_year + 1, 1, 1)
+                        end_date = datetime(current_year, 12, 31)
+                    else:
+                        # 确保 start_date 是 datetime 对象
+                        if not isinstance(start_date, (date, datetime)):
+                            start_date = pd.to_datetime(start_date)
+                        if not isinstance(end_date, (date, datetime)):
+                            end_date = pd.to_datetime(end_date)
+
+                        # 调整起始年份
+                        if start_date.year <= max_year:
+                            start_date = datetime(max_year + 1, 1, 1)
+                        # 调整结束年份（不超过当前年份）
+                        if end_date.year > current_year:
+                            end_date = datetime(current_year, 12, 31)
+
+                    # 更新任务中的日期
+                    task["start_date"] = start_date
+                    task["end_date"] = end_date
+                    new_tasks.append(task)
+                    logger.info(f"{symbol} 最新数据年份 {max_year}，调整后抓取范围：{start_date.date()} ~ {end_date.date()}")
+
+            except Exception as e:
+                logger.error(f"检查 {symbol} 数据时出错: {e}，保留原任务")
+                new_tasks.append(task)
+
+        self.tasks = new_tasks
+        logger.info(f"check 后剩余 {len(self.tasks)} 个任务")
+
+    # ---------- run ----------
+    async def run(self, progress=None, task_id=None):
+        if not self.tasks:
+            logger.info("没有任务需要执行。")
+            return
+
+        total = len(self.tasks)
+        if progress and task_id is not None:
+            progress.update(task_id, total=total)
+
+        for idx, task in enumerate(self.tasks, 1):
+            if progress and task_id is not None:
+                progress.update(
+                    task_id,
+                    completed=idx,
+                    description=f"{self.__class__.__name__} [{idx}/{total}]"
+                )
+
+            symbol = task.get("symbol")
+            market = task.get("market")  # 市场标识，如 "fund"
+            start_date = task.get("start_date")
+            end_date = task.get("end_date")
+
+            if not symbol:
+                logger.warning(f"任务缺少 symbol，跳过: {task}")
+                continue
+
+            # 确定年份范围
+            if start_date and end_date:
+                if not isinstance(start_date, (date, datetime)):
+                    start_date = pd.to_datetime(start_date)
+                if not isinstance(end_date, (date, datetime)):
+                    end_date = pd.to_datetime(end_date)
+                start_year = start_date.year
+                end_year = end_date.year
+            else:
+                # 如果任务中没有日期，默认抓取最近两年（防止全量）
+                current_year = datetime.now().year
+                start_year = current_year - 2
+                end_year = current_year
+
+            # 按年份抓取
+            for year in range(start_year, end_year + 1):
                 try:
-                    df = ak.fund_portfolio_hold_em(symbol=etf_code, date=str(year))
-                except Exception as error:
-                    warnings.warn(
-                        f"{self.__class__.__name__}: 获取 ETF {etf_code} {year} 年持仓失败: {error}"
+                    df = await asyncio.to_thread(
+                        proxy_pool,               # 代理池包装函数
+                        ak.fund_portfolio_hold_em,
+                        symbol=symbol,
+                        date=str(year)
                     )
-                    await asyncio.sleep(3)
-                    try:
-                        df = ak.fund_portfolio_hold_em(symbol=etf_code, date=str(year))
-                    except Exception as second_error:
-                        warnings.warn(
-                            f"{self.__class__.__name__}: ETF {etf_code} 第二次尝试仍失败: {second_error}"
-                        )
+                except Exception as e:
+                    logger.error(f"获取基金 {symbol} {year} 年持仓失败: {e}")
+                    continue
 
-                df = self._rename_columns(df, etf_code)
-                all_dfs.append(df)
+                if df is None or df.empty:
+                    logger.debug(f"基金 {symbol} {year} 年无持仓数据")
+                    continue
 
-        return pd.concat(all_dfs, ignore_index=True)
+                # 处理数据
+                df = self._rename_columns(df, symbol, market)
+
+                # 插入数据库
+                try:
+                    save_dataframe(
+                        df,
+                        table_name=self.table_name,
+                        market="fund",  # 市场名，对应数据库文件 fund.duckdb
+                        primary_key=["symbol", "date", "stock_id"]
+                    )
+                    logger.info(f"基金 {symbol} {year} 年持仓数据已保存，共 {len(df)} 条")
+                except Exception as e:
+                    logger.error(f"插入基金 {symbol} {year} 年持仓数据失败: {e}")
+
+        logger.info(f"{self.__class__.__name__}: 数据抓取完成，共处理 {total} 个任务")

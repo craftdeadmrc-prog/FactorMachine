@@ -1,73 +1,17 @@
 import argparse
 import asyncio
-import importlib
-import os
-import sys
-
-from core.scheduler import run_spiders
-from core.config import MAX_CONCURRENCY
-from utils.symbol.factor_calculator import FactorCalculator
 import datetime
+import sys
+from typing import List
 
-def get_available_markets() -> list:
-    """
-    自动扫描 spider 目录，发现所有带有 merge.py 的市场子目录。
+from core.task import init_task_factory, get_all_tasks, get_task
+from core.scheduler import Scheduler
+from core.config import MAX_CONCURRENCY
 
-    例如存在：
-      spider/ashare/merge.py
-      spider/fund/merge.py
-      spider/crypto/merge.py
-    则返回: ["ashare", "fund", "crypto"]
-    """
-    # 当前文件所在目录: .../FactorMachine
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    spider_dir = os.path.join(current_dir, "spider")
-
-    if not os.path.isdir(spider_dir):
-        print(f"错误：市场目录不存在: {spider_dir}")
-        sys.exit(1)
-
-    markets = []
-    for item in os.listdir(spider_dir):
-        market_path = os.path.join(spider_dir, item)
-        if not os.path.isdir(market_path):
-            continue
-        merge_file = os.path.join(market_path, "merge.py")
-        if os.path.exists(merge_file):
-            markets.append(item)
-
-    if not markets:
-        print(f"错误：在 {spider_dir} 下未发现任何包含 merge.py 的市场子目录")
-        sys.exit(1)
-
-    return markets
-
-
-def dynamic_import_merge(market: str):
-    """
-    动态导入指定市场的 merge 函数，相当于 spider.{market}.merge.merge
-
-    要求：
-      - 存在模块 spider.{market}.merge
-      - 模块内存在可调用对象 merge
-    """
-    try:
-        module = importlib.import_module(f"spider.{market}.merge")
-    except ImportError as e:
-        print(f"错误：无法导入 spider.{market}.merge 模块: {e}")
-        sys.exit(1)
-
-    try:
-        merge_func = getattr(module, "merge")
-    except AttributeError:
-        print(f"错误：模块 spider.{market}.merge 中未找到 merge 函数")
-        sys.exit(1)
-
-    if not callable(merge_func):
-        print(f"错误：spider.{market}.merge.merge 不是可调用对象")
-        sys.exit(1)
-
-    return merge_func
+# 假设以下函数在别处定义
+from utils.market import get_available_markets
+from utils.merge import dynamic_import_merge
+from factors.calculator import FactorCalculator
 
 
 def main():
@@ -101,7 +45,7 @@ def main():
     parser.add_argument(
         "--factors",
         default=False,
-        action="store_true",          # 是否“只计算因子”
+        action="store_true",
         help="单独计算因子（不再重新爬取）",
     )
     parser.add_argument(
@@ -118,7 +62,10 @@ def main():
 
     args = parser.parse_args()
 
-    # 自动发现所有可用市场
+    # ---------- 1. 初始化任务工厂（加载所有爬虫任务） ----------
+    init_task_factory()  # 默认扫描 spider 目录，基类 BaseSpider
+
+    # 自动发现所有可用市场（基于 merge.py 存在与否）
     available_markets = get_available_markets()
 
     # 根据参数决定本次要处理的市场列表
@@ -133,22 +80,51 @@ def main():
     print(f"可用市场: {available_markets}")
     print(f"本次处理市场: {markets}")
 
-    # 如果不是“只计算因子”，则需要先跑一遍爬虫
+    # ---------- 2. 爬虫执行（使用新调度器） ----------
     if not args.factors:
-        for market in markets:
-            print(f"\n=== 开始运行 {market} 市场爬虫 ===")
-            asyncio.run(
-                run_spiders(
-                    mode=args.mode,
-                    spec=args.spec,
-                    start_date=args.start_date,
-                    end_date=args.end_date,
-                    max_concurrency=args.concurrency,
-                )
-            )
-            print(f"=== {market} 市场爬虫完成 ===")
+        # 确定要执行的任务列表
+        tasks_to_run = []
+        if args.spec:
+            # 指定了爬虫类名，直接获取该任务
+            task = get_task(args.spec)
+            if task:
+                tasks_to_run = [task]
+            else:
+                print(f"错误：未找到任务 {args.spec}")
+                sys.exit(1)
+        else:
+            # 未指定 spec：获取所有爬虫任务，并按市场筛选
+            all_tasks = get_all_tasks()
+            for task in all_tasks:
+                # 从任务元数据中获取模块名，解析市场
+                module_name = task.metadata.get("module", "")
+                # 模块名形如 spider.ashare.xxx_spider
+                parts = module_name.split(".")
+                if len(parts) >= 2 and parts[0] == "spider":
+                    task_market = parts[1]
+                    if task_market in markets:
+                        tasks_to_run.append(task)
+        if not tasks_to_run:
+            print("没有找到符合条件的爬虫任务，退出")
+            sys.exit(1)
 
-    # 计算因子前，对每个市场可选择性执行 merge
+        # 创建调度器并运行任务
+        scheduler = Scheduler(max_concurrency=args.concurrency)
+        kwargs = {
+            "start_date": args.start_date,
+            "end_date": args.end_date,
+        }
+        print(f"将执行 {len(tasks_to_run)} 个任务: {[t.name for t in tasks_to_run]}")
+        results = asyncio.run(scheduler.run_tasks([t.name for t in tasks_to_run], **kwargs))
+        # 输出简要执行结果
+        for task_name, result in results.items():
+            status = result.get("status", "unknown")
+            if status == "failed":
+                print(f"任务 {task_name} 执行失败: {result.get('error')}")
+            else:
+                print(f"任务 {task_name} 执行成功")
+
+    # ---------- 3. 合并与因子计算（保持原有逻辑） ----------
     if args.merge:
         for market in markets:
             print(f"\n=== 开始合并 {market} 市场 parquet ===")
@@ -156,7 +132,6 @@ def main():
             merge_func()
             print(f"=== {market} 市场合并完成 ===")
     if args.factors:
-        # 因子计算：对每个市场基于其合并后的 parquet 计算因子
         for market in markets:
             print(f"\n=== 开始计算 {market} 市场因子 ===")
             loader = FactorCalculator(market_type=market)

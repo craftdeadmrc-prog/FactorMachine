@@ -1,0 +1,5 @@
+{
+  "first_order": ["rolling_mean", "mul", "add", "sub", "div", "mean", "rolling_sum"],
+  "second_order": ["rolling_std", "std"],
+  "zero_order": ["rank", "zscore", "winsorize"]
+}

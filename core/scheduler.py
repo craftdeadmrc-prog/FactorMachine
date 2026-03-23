@@ -1,20 +1,19 @@
-# core/scheduler.py
-import os
-import glob
-import importlib
+"""
+任务调度器：基于任务（Task）进行并发执行，支持进度显示和资源锁。
+"""
 import asyncio
-from typing import List, Optional, Tuple, Dict
+from typing import List, Dict, Optional
 
-from spider.base_spider import BaseSpider
-from .storage import save_dataframe, get_last_update_date, load_dataframe
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+
+from .task import Task, get_task, get_all_tasks
 from .config import MAX_CONCURRENCY
-from utils.compat.normalize_date import normalize_date_str
-import pandas as pd
 
 
 class ResourceLockManager:
+    """全局资源锁管理器，防止同一资源的任务并发执行。"""
     _locks: Dict[str, asyncio.Lock] = {}
-    
+
     @classmethod
     def get_lock(cls, resource_id: str) -> asyncio.Lock:
         if resource_id not in cls._locks:
@@ -22,119 +21,79 @@ class ResourceLockManager:
         return cls._locks[resource_id]
 
 
-def load_all_spiders() -> List[BaseSpider]:
-    spiders: List[BaseSpider] = []
-    spiders_dir = os.path.join(os.path.dirname(__file__), "..", "spider")
-    markets = ["ashare", "fund", "us", "crypto"]
-    for market in markets:
-        files = glob.glob(os.path.join(spiders_dir, market, "*spider.py"))
-        for file in files:
-            module_name = os.path.splitext(os.path.basename(file))[0]
-            if module_name.startswith("_"):
-                continue
-            module = importlib.import_module(f"spider.{market}.{module_name}")
-            for attr in dir(module):
-                obj = getattr(module, attr)
-                if isinstance(obj, type) and issubclass(obj, BaseSpider) and obj is not BaseSpider:
-                    spiders.append(obj())
-    return spiders
+class Scheduler:
+    """
+    任务调度器。
+    支持并发执行多个任务，并提供进度条反馈和资源锁控制。
+    """
+    def __init__(self, max_concurrency: int = None):
+        self.max_concurrency = max_concurrency or MAX_CONCURRENCY
+        self.progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            expand=True
+        )
 
+    async def run_tasks(self, task_names: List[str], **kwargs) -> Dict[str, Dict]:
+        """
+        并发执行指定的多个任务。
+        :param task_names: 任务名称列表
+        :param kwargs: 传递给每个任务执行器的参数（如 start_date, end_date, progress, task_id 等）
+        :return: 字典，键为任务名，值为任务执行结果（含 status、logs 等）
+        """
+        tasks = [get_task(name) for name in task_names if get_task(name) is not None]
+        if not tasks:
+            return {}
 
-async def run_spiders(
-    mode: str = "full",
-    spec: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    max_concurrency: Optional[int] = None,
-):
-    if max_concurrency is None:
-        max_concurrency = MAX_CONCURRENCY
+        with self.progress:
+            # 为每个任务创建进度条条目
+            task_progress_ids = {}
+            for task in tasks:
+                task_id = self.progress.add_task(task.name, total=100)
+                task_progress_ids[task] = task_id
 
-    spiders = load_all_spiders()
-    if spec:
-        spiders = [s for s in spiders if s.__class__.__name__ == spec]
+            sem = asyncio.Semaphore(self.max_concurrency)
 
-    if not spiders:
-        return
+            async def run_one(task: Task):
+                task_id = task_progress_ids[task]
+                # 获取资源锁（若任务类定义了 resource 属性）
+                task_class = task.metadata.get("class")
+                resource = getattr(task_class, "resource", None) if task_class else None
+                lock = ResourceLockManager.get_lock(resource) if resource else None
 
-    from datetime import date
-    today_yyyymmdd = normalize_date_str(date.today().strftime("%Y%m%d"))
-    end_date = end_date or today_yyyymmdd
+                async def execute():
+                    # 将进度条对象和任务ID传递给执行器（部分任务可能需要）
+                    exec_kwargs = kwargs.copy()
+                    exec_kwargs['progress'] = self.progress
+                    exec_kwargs['task_id'] = task_id
+                    result = await task.execute(**exec_kwargs)
+                    if result['status'] == 'failed':
+                        self.progress.update(task_id, description=f"{task.name} [red]ERROR")
+                    elif result['status'] == 'warning':
+                        self.progress.update(task_id, description=f"{task.name} [yellow]WARNING")
+                    else:
+                        self.progress.update(task_id, completed=100, description=f"{task.name} [green]DONE")
+                    return result
 
-    # 使用rich的进度管理器
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-    
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        expand=True
-    )
-    
-    # 为每个爬虫创建进度任务
-    with progress:
-        spider_tasks = {}
-        for spider in spiders:
-            task_desc = f"{spider.__class__.__name__}"
-            task_id = progress.add_task(task_desc, total=100)  # 先设为100，具体进度在爬虫内更新
-            spider_tasks[spider] = task_id
-        
-        async def _run_one(spider: BaseSpider):
-            task_id = spider_tasks[spider]
-            resource = getattr(spider, "resource")
-            table_name = getattr(spider, "table_name")
-            
-            # 更新模式跳过今日已更新的
-            last_update = get_last_update_date(table_name)
-            start_date = last_update if last_update else None
-            if mode == "update" and last_update == today_yyyymmdd:
-                progress.update(task_id, completed=100)
-                return
-            
-            # 获取对应资源的锁
-            lock = ResourceLockManager.get_lock(resource)
-            async with lock:
-                try:
-                    # 将进度条对象传递给爬虫
-                    df = await spider.run(
-                        start_date=start_date, 
-                        end_date=end_date,
-                        progress=progress,
-                        task_id=task_id
-                    )
-                except Exception as e:
-                    progress.update(task_id, description=f"{spider.__class__.__name__} [red]ERROR")
-                    raise e
-                
-                if df is not None and hasattr(df, "empty") and not df.empty and table_name:
-                    if mode == "update":
-                        try:
-                            old_df = load_dataframe(table_name)
-                        except Exception:
-                            old_df = None
-                        if old_df is not None and hasattr(old_df, "empty") and not old_df.empty:
-                            df = pd.concat([old_df, df], ignore_index=True)
-                            key_cols = []
-                            for col in ["date", "code"]:
-                                if col in df.columns:
-                                    key_cols.append(col)
-                            if key_cols:
-                                df = df.drop_duplicates(
-                                    subset=key_cols,
-                                    keep="last",
-                                )
-                    save_dataframe(df, table_name)
-                
-                progress.update(task_id, completed=100, description=f"{spider.__class__.__name__} [green]DONE")
+                if lock:
+                    async with lock:
+                        return await execute()
+                else:
+                    return await execute()
 
-        # 创建并发任务
-        sem = asyncio.Semaphore(max_concurrency)
-        
-        async def _run_with_semaphore(spider: BaseSpider):
-            async with sem:
-                await _run_one(spider)
-        
-        # 并发运行所有爬虫
-        await asyncio.gather(*(_run_with_semaphore(sp) for sp in spiders))
+            # 并发执行所有任务，允许异常传播（通过 return_exceptions 收集）
+            results = await asyncio.gather(*(run_one(task) for task in tasks), return_exceptions=True)
+            result_dict = {}
+            for task, res in zip(tasks, results):
+                if isinstance(res, Exception):
+                    result_dict[task.name] = {"status": "failed", "error": str(res)}
+                else:
+                    result_dict[task.name] = res
+            return result_dict
+
+    async def run_task(self, task_name: str, **kwargs) -> Dict:
+        """运行单个任务。"""
+        return await self.run_tasks([task_name], **kwargs)
