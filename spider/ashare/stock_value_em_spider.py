@@ -9,12 +9,13 @@ from ..base_spider import BaseSpider
 from core.storage import save_dataframe
 from core.proxy import proxy_pool
 from core.scheduler import task
+
 logger = logging.getLogger(__name__)
 
 @task(description="获取A股估值数据（PE、PB、市值等）")
 class StockValueEmSpider(BaseSpider):
     resource = "ashare_eastmoney"
-    table_name = "valuation"  # 估值表名（市场通过文件区分）
+    table_name = "valuation"          # 估值表名（市场通过文件区分）
 
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)
@@ -44,22 +45,16 @@ class StockValueEmSpider(BaseSpider):
         # 只调用父类的 check，完成基础的任务过滤（如数据完整性检查）
         super().check()
 
-    async def run(self, progress=None, task_id=None):
+    async def run(self):
         if not self.tasks:
             logger.info("No tasks to run.")
             return
 
         total = len(self.tasks)
-        if progress and task_id is not None:
-            progress.update(task_id, total=total)
+        logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
         for idx, task in enumerate(self.tasks, 1):
-            if progress and task_id is not None:
-                progress.update(
-                    task_id,
-                    completed=idx,
-                    description=f"{self.__class__.__name__} [{idx}/{total}]"
-                )
+            logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
 
             market = task['market']
             symbol = task['symbol']

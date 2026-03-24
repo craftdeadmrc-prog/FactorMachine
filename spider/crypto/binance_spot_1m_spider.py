@@ -25,11 +25,10 @@ BASE_S3_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 START_DATE_DEFAULT = datetime(2017, 8, 17)   # 数据最早起始日
 
 
-@task(description= "获取币安现货1分钟K线数据（日粒度ZIP包）")
+@task(description="获取币安现货1分钟K线数据（日粒度ZIP包）")
 class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
     resource = "spot_binance"
     table_name = "spot_kline_1m"
-    factor_table_name = None      # 该资源无因子表
     temp_dir = os.path.join(DATA_PATH, "crypto_binance_temp")
     os.makedirs(temp_dir, exist_ok=True)
 
@@ -46,11 +45,11 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
     def _rename_columns(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """添加标识字段、处理时间、删除无用列"""
         df['open_time'] = (df['open_time'] // 1000).astype('int64')
-        time_test = pd.to_datetime(df['open_time'][0] // 1000,unit='s')
+        time_test = pd.to_datetime(df['open_time'][0] // 1000, unit='s')
         if time_test > pd.to_datetime("1980-01-01"):
-            df['date'] = pd.to_datetime(df['open_time'] // 1000,unit='s')
+            df['date'] = pd.to_datetime(df['open_time'] // 1000, unit='s')
         else:
-            df['date'] = pd.to_datetime(df['open_time'],unit='s')
+            df['date'] = pd.to_datetime(df['open_time'], unit='s')
         df.drop(columns=['open_time', 'close_time', 'ignore'], inplace=True, errors='ignore')
         df['symbol'] = symbol
         df.sort_values(['symbol', 'date'], inplace=True)
@@ -93,7 +92,7 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         all_keys = []
         marker = None
         while True:
-            xml_text = proxy_pool(self._get_s3_xml_sync,prefix, marker)
+            xml_text = proxy_pool(self._get_s3_xml_sync, prefix, marker)
             root = ET.fromstring(xml_text)
             # 提取本页所有 Contents 的 Key
             checksum_key = None
@@ -178,7 +177,7 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         logger.info(f"check 后剩余 {len(self.tasks)} 个任务")
 
     async def process_symbol(self, symbol: str, start_date: datetime, end_date: datetime,
-                            session: aiohttp.ClientSession, progress=None, task_id=None):
+                            session: aiohttp.ClientSession):
         # 1. 获取该 symbol 所有存在的 ZIP 文件 Key
         try:
             keys = await asyncio.to_thread(self._get_zip_keys_for_symbol_sync, symbol)
@@ -259,36 +258,36 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         await asyncio.gather(*tasks)
 
         logger.info(f"{symbol} 处理完成，共处理 {len(dates_to_process)} 个日期")
-        
+
     # ---------- 主运行方法 ----------
-    async def run(self, progress=None, task_id=None):
+    async def run(self):
         if not self.tasks:
             logger.info("无任务，退出")
             return
 
         total = len(self.tasks)
-        if progress and task_id is not None:
-            progress.update(task_id, total=total)
+        logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
         conn = aiohttp.TCPConnector(limit=10)
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
         async with aiohttp.ClientSession(connector=conn) as session:
+            processed = 0
             async def process_with_semaphore(task):
+                nonlocal processed
                 symbol = task['symbol']
                 start_date = task['start_date']
                 end_date = task['end_date']
                 try:
                     async with semaphore:
                         await self.process_symbol(
-                            symbol, start_date, end_date, session,
-                            progress=progress, task_id=task_id
+                            symbol, start_date, end_date, session
                         )
                 except Exception as e:
                     logger.error(f"处理 {symbol} 失败: {e}")
                 finally:
-                    if progress and task_id is not None:
-                        progress.update(task_id, advance=1)
+                    processed += 1
+                    logger.info(f"{self.__class__.__name__} [{processed}/{total}] 完成 {symbol}")
 
             tasks = [process_with_semaphore(task) for task in self.tasks]
             await asyncio.gather(*tasks)

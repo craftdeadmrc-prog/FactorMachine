@@ -80,22 +80,16 @@ class StockDailySpider(BaseSpider):
         self.tasks.extend(factor_missing_tasks)
         logger.info(f"After factor check, {len(self.tasks)} tasks remain for {self.market}")
 
-    async def run(self, progress=None, task_id=None):
+    async def run(self):
         if not self.tasks:
             logger.info("No tasks to run.")
             return
 
         total = len(self.tasks)
-        if progress and task_id is not None:
-            progress.update(task_id, total=total)
+        logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
         for idx, task in enumerate(self.tasks, 1):
-            if progress and task_id is not None:
-                progress.update(
-                    task_id,
-                    completed=idx,
-                    description=f"{self.__class__.__name__} [{idx}/{total}]"
-                )
+            logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
 
             market = task['market']
             symbol = task['symbol']

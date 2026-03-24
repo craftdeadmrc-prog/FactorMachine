@@ -1,4 +1,4 @@
-""""
+"""
 WIP,部分指标在jq里定义为因子,需要先完善因子表设计
 """
 import asyncio
@@ -6,14 +6,15 @@ import random
 import logging
 import akshare as ak
 import pandas as pd
+from typing import List, Dict
 
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe
-# from core.scheduler import task
+from core.scheduler import task
 
 logger = logging.getLogger(__name__)
 
-# @task(description="获取A股财务摘要数据（常用指标、盈利能力、成长能力等）")
+@task(description="获取A股财务摘要数据（常用指标、盈利能力、成长能力等）")
 class StockFinancialAbstractSpider(BaseSpider):
     resource = "ashare_sina"
 
@@ -69,6 +70,9 @@ class StockFinancialAbstractSpider(BaseSpider):
         }
     }
 
+    def __init__(self, tasks: List[Dict] = None, update: bool = False):
+        super().__init__(tasks, update)
+
     def _rename_columns(
         self,
         df: pd.DataFrame,
@@ -93,36 +97,23 @@ class StockFinancialAbstractSpider(BaseSpider):
         df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
         return df
 
-    async def run(
-        self,
-        start_date: str = None,
-        end_date: str = None,
-        progress=None,
-        task_id=None,
-    ) -> None:
-        """
-        扫描全市场A股，对每只股票爬取财务摘要数据，并按利润表/指标表分别存入。
-        """
-        symbols = self.get_symbols()
-        if not symbols:
-            logger.warning("未获取到任何股票代码，退出")
+    def check(self):
+        # super().check()
+        pass
+
+    async def run(self):
+        if not self.tasks:
+            logger.info("No tasks to run.")
             return
 
-        total = len(symbols)  # 每个股票只调用一次API，但会产生两个表的数据
-        if progress and task_id is not None:
-            progress.update(task_id, total=total)
+        total = len(self.tasks)
+        logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
-        completed = 0
+        for idx, task in enumerate(self.tasks, 1):
+            logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
 
-        for market, symbol in symbols:
-            completed += 1
-            if progress and task_id is not None:
-                progress.update(
-                    task_id,
-                    completed=completed,
-                    description=f"{self.__class__.__name__} [{completed}/{total}]",
-                )
-
+            market = task['market']
+            symbol = task['symbol']
             stock = f"{market}{symbol}"
 
             try:
@@ -186,13 +177,12 @@ class StockFinancialAbstractSpider(BaseSpider):
                     save_dataframe(
                         df_pivot,
                         table_name=table_name,
-                        db="ashare",
+                        db=self.market,
                         primary_key=["symbol", "date"]
                     )
                     logger.info(f"股票 {symbol} {table_cn} 数据已保存，共 {len(df_pivot)} 条")
                 except Exception as e:
                     logger.error(f"插入股票 {symbol} {table_cn} 数据失败: {e}")
 
-            await asyncio.sleep(random.randint(1, 3))
 
-        logger.info(f"{self.__class__.__name__}: 财务摘要抓取完成，共处理 {len(symbols)} 只股票")
+        logger.info(f"{self.__class__.__name__}: 财务摘要抓取完成，已处理 {total} 个任务")

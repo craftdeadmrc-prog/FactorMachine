@@ -356,18 +356,18 @@ class StockFinancialReportSpider(BaseSpider):
         self.tasks = keep_tasks
         logger.info(f"check 后剩余 {len(self.tasks)} 个需要爬取的任务")
 
-
-    async def run(self, progress=None, task_id=None):
+    async def run(self):
         """
         扫描 tasks 中的股票，对每只股票爬取三种财务报表并分别存入对应表。
+        进度通过 logger.info 输出，不再使用 rich progress。
         """
         if not self.tasks:
             logger.info("No tasks to run.")
             return
 
-        total = len(self.tasks) * len(self.symbol_map)  # 任务数 * 报表类型数
-        if progress and task_id is not None:
-            progress.update(task_id, total=total)
+        total_stocks = len(self.tasks)
+        total_reports = total_stocks * len(self.symbol_map)  # 总报表数
+        logger.info(f"{self.__class__.__name__}: 开始处理 {total_stocks} 只股票，共 {total_reports} 份报表")
 
         completed = 0
 
@@ -378,12 +378,7 @@ class StockFinancialReportSpider(BaseSpider):
 
             for report_type_cn, table_name in self.symbol_map.items():
                 completed += 1
-                if progress and task_id is not None:
-                    progress.update(
-                        task_id,
-                        completed=completed,
-                        description=f"{self.__class__.__name__} [{completed}/{total}]"
-                    )
+                logger.info(f"{self.__class__.__name__} [{completed}/{total_reports}] 正在处理 {symbol} {report_type_cn}")
 
                 # 使用代理池爬取
                 try:
@@ -409,7 +404,7 @@ class StockFinancialReportSpider(BaseSpider):
                     save_dataframe(
                         df,
                         table_name=table_name,
-                        db="ashare",
+                        db=self.market,
                         primary_key=["symbol", "date"]
                     )
                     logger.info(f"股票 {symbol} {report_type_cn} 数据已保存，共 {len(df)} 条")
@@ -421,7 +416,7 @@ class StockFinancialReportSpider(BaseSpider):
         # 爬取完成后，检查并清理全空列
         self._clean_empty_columns()
 
-        logger.info(f"{self.__class__.__name__}: 财务数据抓取完成，共处理 {len(self.tasks)} 只股票")
+        logger.info(f"{self.__class__.__name__}: 财务数据抓取完成，共处理 {total_stocks} 只股票")
 
     def _clean_empty_columns(self):
         """
@@ -461,7 +456,6 @@ class StockFinancialReportSpider(BaseSpider):
 
             if columns_to_report:
                 # 只打印，不实际删除列
-                # print(f"表 {table_name} 中以下列全为空，请检查映射表是否需要修正：{columns_to_report}")
                 logger.info(f"表 {table_name} 全空列：{columns_to_report}")
             else:
                 logger.info(f"表 {table_name} 无全空列")

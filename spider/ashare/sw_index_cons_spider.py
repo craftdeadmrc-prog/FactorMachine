@@ -17,7 +17,9 @@ from ..base_spider import BaseSpider
 from core.storage import save_dataframe, load_dataframe
 from core.proxy import proxy_pool
 from core.scheduler import task
+
 logger = logging.getLogger(__name__)
+
 
 @task(description="获取申万一到三级行业成份数据（含行业层级）")
 class SwIndexConsSpider(BaseSpider):
@@ -64,7 +66,8 @@ class SwIndexConsSpider(BaseSpider):
                 self.tasks = []  # 没有数据，全部任务都需要执行
         except Exception as e:
             logger.error(f"检查行业数据完整性失败: {e}")
-    async def run(self, progress=None, task_id=None) -> None:
+
+    async def run(self) -> None:
         """
         获取申万三级行业成份数据，逐行业插入数据库
 
@@ -76,7 +79,7 @@ class SwIndexConsSpider(BaseSpider):
         - 逐行业将数据插入数据库，主键为 (symbol, market, date) 确保同一股票同一天只保留一条记录。
         """
         total = len(self.tasks)
-        if total>0:
+        if total > 0:
             # 1. 获取行业信息（使用代理池）
             try:
                 third_info_df = await asyncio.to_thread(proxy_pool, ak.sw_index_third_info)
@@ -101,16 +104,10 @@ class SwIndexConsSpider(BaseSpider):
                 logger.warning("未获取到任何行业代码，退出")
                 return
 
-            if progress and task_id is not None:
-                progress.update(task_id, total=total)
+            logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个行业")
 
             for idx, symbol in enumerate(industry_symbols, start=1):
-                if progress and task_id is not None:
-                    progress.update(
-                        task_id,
-                        completed=idx,
-                        description=f"{self.__class__.__name__} [{idx}/{total}]"
-                    )
+                logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理行业 {symbol}")
 
                 # 2. 获取成份股（使用代理池，带重试）
                 try:
@@ -153,4 +150,6 @@ class SwIndexConsSpider(BaseSpider):
                 except Exception as e:
                     logger.error(f"插入行业 {symbol} 数据失败: {e}")
 
-        logger.info(f"{self.__class__.__name__}: 数据抓取完成，共处理 {total} 个行业")
+            logger.info(f"{self.__class__.__name__}: 数据抓取完成，共处理 {total} 个行业")
+        else:
+            logger.info("No tasks to run.")

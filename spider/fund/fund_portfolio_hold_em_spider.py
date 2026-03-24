@@ -118,7 +118,7 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                 WHERE symbol = '{symbol}'
             """
             try:
-                df = load_dataframe(sql, db=self.market)  # 需要从任务中获取 market，这里使用 self.market（已在基类中定义）
+                df = load_dataframe(sql, db=self.market)  # 使用类属性 market
                 if df.empty or df.iloc[0]["max_date"] is None:
                     # 无历史数据，保留原任务
                     new_tasks.append(task)
@@ -146,21 +146,18 @@ class FundPortfolioHoldEmSpider(BaseSpider):
 
     # ---------- run ----------
     async def run(self, progress=None, task_id=None):
+        """
+        参数 progress 和 task_id 保留以兼容调度器调用，但内部不再使用，改用 logger.info 输出进度。
+        """
         if not self.tasks:
             logger.info("没有任务需要执行。")
             return
 
         total = len(self.tasks)
-        if progress and task_id is not None:
-            progress.update(task_id, total=total)
+        logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
         for idx, task in enumerate(self.tasks, 1):
-            if progress and task_id is not None:
-                progress.update(
-                    task_id,
-                    completed=idx,
-                    description=f"{self.__class__.__name__} [{idx}/{total}]"
-                )
+            logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
 
             symbol = task.get("symbol")
             market = task.get("market")  # 市场标识，如 "fund"
@@ -172,7 +169,7 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                 continue
 
             start_year = start_date.year
-            end_year = end_date.year
+            end_year = end_date.year if end_date else datetime.now().year
 
             # 按年份抓取
             for year in range(start_year, end_year + 1):
@@ -199,7 +196,7 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                     save_dataframe(
                         df,
                         table_name=self.table_name,
-                        db="fund",  # 市场名，对应数据库文件 fund.duckdb
+                        db=self.market,  # 使用类属性 market
                         primary_key=["symbol", "date", "stock_id"]
                     )
                     logger.info(f"基金 {symbol} {year} 年持仓数据已保存，共 {len(df)} 条")
