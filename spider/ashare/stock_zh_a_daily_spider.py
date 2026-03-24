@@ -8,15 +8,15 @@ from typing import List, Dict
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe, load_dataframe
 from core.proxy import proxy_pool
+from core.scheduler import task
 
 logger = logging.getLogger(__name__)
 
-
+@task(description="获取A股日线行情及复权因子")
 class StockDailySpider(BaseSpider):
     resource = "ashare_sina"
     table_name = "kline_daily"
     factor_table_name = "adjust_factor"
-    description = "获取A股日线行情及复权因子"
 
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)

@@ -9,13 +9,13 @@ import pandas as pd
 
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe
+# from core.scheduler import task
 
 logger = logging.getLogger(__name__)
 
-
+# @task(description="获取A股财务摘要数据（常用指标、盈利能力、成长能力等）")
 class StockFinancialAbstractSpider(BaseSpider):
     resource = "ashare_sina"
-    description = "获取A股财务摘要数据（常用指标、盈利能力、成长能力等）"
 
     # 报表类型中文名 -> 表名映射
     symbol_map = {

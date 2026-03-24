@@ -8,14 +8,13 @@ from typing import List, Dict
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe
 from core.proxy import proxy_pool
-
+from core.scheduler import task
 logger = logging.getLogger(__name__)
 
-
+@task(description="获取A股估值数据（PE、PB、市值等）")
 class StockValueEmSpider(BaseSpider):
     resource = "ashare_eastmoney"
     table_name = "valuation"  # 估值表名（市场通过文件区分）
-    description = "获取A股估值数据（PE、PB、市值等）"
 
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)

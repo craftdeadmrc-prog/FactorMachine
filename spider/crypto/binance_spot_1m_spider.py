@@ -15,6 +15,7 @@ from ..base_spider import BaseSpider
 from core.storage import save_dataframe, load_dataframe
 from core.config import DATA_PATH, MAX_CONCURRENCY
 from core.proxy import proxy_pool
+from core.scheduler import task
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,11 @@ BASE_S3_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 START_DATE_DEFAULT = datetime(2017, 8, 17)   # 数据最早起始日
 
 
+@task(description= "获取币安现货1分钟K线数据（日粒度ZIP包）")
 class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
     resource = "spot_binance"
     table_name = "spot_kline_1m"
     factor_table_name = None      # 该资源无因子表
-    description = "获取币安现货1分钟K线数据（日粒度ZIP包）"
     temp_dir = os.path.join(DATA_PATH, "crypto_binance_temp")
     os.makedirs(temp_dir, exist_ok=True)
 

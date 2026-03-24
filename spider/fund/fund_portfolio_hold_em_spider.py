@@ -10,10 +10,11 @@ import akshare as ak
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe, load_dataframe
 from core.proxy import proxy_pool
+from core.scheduler import task
 
 logger = logging.getLogger(__name__)
 
-
+@task(description="获取ETF基金持仓数据（股票持仓明细）")
 class FundPortfolioHoldEmSpider(BaseSpider):
     """
     ETF 基金持仓爬虫（仅限 ETF）
@@ -23,7 +24,6 @@ class FundPortfolioHoldEmSpider(BaseSpider):
     """
     resource = "fund_eastmoney"
     table_name = "fund_portfolio_hold"
-    description = "获取ETF基金持仓数据（股票持仓明细）"
 
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)
@@ -127,9 +127,6 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                 max_date = df.iloc[0]["max_date"]
                 if isinstance(max_date, (date, datetime)):
                     max_year = max_date.year
-                else:
-                    # 若为字符串，尝试解析
-                    max_year = pd.to_datetime(max_date).year
 
                 if max_year >= current_year:
                     # 已有今年或更新的数据，跳过该任务
@@ -137,37 +134,13 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                     continue
                 else:
                     # 需要抓取，调整年份范围
-                    # 提取原任务的起止日期（datetime 对象）
-                    start_date = task.get("start_date")
-                    end_date = task.get("end_date")
-                    if start_date is None or end_date is None:
-                        # 如果任务中没有日期范围，则默认从最新年份+1到今年
-                        start_date = datetime(max_year + 1, 1, 1)
-                        end_date = datetime(current_year, 12, 31)
-                    else:
-                        # 确保 start_date 是 datetime 对象
-                        if not isinstance(start_date, (date, datetime)):
-                            start_date = pd.to_datetime(start_date)
-                        if not isinstance(end_date, (date, datetime)):
-                            end_date = pd.to_datetime(end_date)
-
-                        # 调整起始年份
-                        if start_date.year <= max_year:
-                            start_date = datetime(max_year + 1, 1, 1)
-                        # 调整结束年份（不超过当前年份）
-                        if end_date.year > current_year:
-                            end_date = datetime(current_year, 12, 31)
-
-                    # 更新任务中的日期
+                    start_date = max_date
                     task["start_date"] = start_date
-                    task["end_date"] = end_date
                     new_tasks.append(task)
-                    logger.info(f"{symbol} 最新数据年份 {max_year}，调整后抓取范围：{start_date.date()} ~ {end_date.date()}")
-
+                    logger.info(f"{symbol} 最新数据年份 {max_year}，调整后抓取范围：{max_year} ~ {current_year}")
             except Exception as e:
                 logger.error(f"检查 {symbol} 数据时出错: {e}，保留原任务")
                 new_tasks.append(task)
-
         self.tasks = new_tasks
         logger.info(f"check 后剩余 {len(self.tasks)} 个任务")
 
@@ -198,19 +171,8 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                 logger.warning(f"任务缺少 symbol，跳过: {task}")
                 continue
 
-            # 确定年份范围
-            if start_date and end_date:
-                if not isinstance(start_date, (date, datetime)):
-                    start_date = pd.to_datetime(start_date)
-                if not isinstance(end_date, (date, datetime)):
-                    end_date = pd.to_datetime(end_date)
-                start_year = start_date.year
-                end_year = end_date.year
-            else:
-                # 如果任务中没有日期，默认抓取最近两年（防止全量）
-                current_year = datetime.now().year
-                start_year = current_year - 2
-                end_year = current_year
+            start_year = start_date.year
+            end_year = end_date.year
 
             # 按年份抓取
             for year in range(start_year, end_year + 1):

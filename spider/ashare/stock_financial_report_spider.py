@@ -8,13 +8,12 @@ from typing import List, Dict
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe, load_dataframe
 from core.proxy import proxy_pool
-
+from core.scheduler import task
 logger = logging.getLogger(__name__)
 
-
+@task(description="获取A股财务报表数据（资产负债表、利润表、现金流量表）")
 class StockFinancialReportSpider(BaseSpider):
     resource = "ashare_sina"
-    description = "获取A股财务报表数据（资产负债表、利润表、现金流量表）"
     table_names = ["balance", "income", "cash_flow"]  # 三张表的名称
 
     # 报表类型中文名 -> 表名映射

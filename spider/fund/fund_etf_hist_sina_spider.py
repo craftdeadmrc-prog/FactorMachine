@@ -8,10 +8,11 @@ from datetime import date, datetime
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe
 from core.proxy import proxy_pool
+from core.scheduler import task
 
 logger = logging.getLogger(__name__)
 
-
+@task(description="获取ETF日线行情数据（新浪）")
 class EtfDailySinaSpider(BaseSpider):
     """
     ETF日行情爬虫
@@ -23,7 +24,6 @@ class EtfDailySinaSpider(BaseSpider):
     resource = "fund_sina"
     table_name = "kline_daily"
     factor_table_name = None          # ETF 无复权因子表
-    description = "获取ETF日线行情数据（新浪）"
 
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)

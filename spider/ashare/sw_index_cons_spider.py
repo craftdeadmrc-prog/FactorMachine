@@ -16,10 +16,10 @@ import akshare as ak
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe, load_dataframe
 from core.proxy import proxy_pool
-
+from core.scheduler import task
 logger = logging.getLogger(__name__)
 
-
+@task(description="获取申万一到三级行业成份数据（含行业层级）")
 class SwIndexConsSpider(BaseSpider):
     """
     申万三级行业成份爬虫
@@ -27,7 +27,6 @@ class SwIndexConsSpider(BaseSpider):
 
     resource = "ashare_swhy"
     table_name = "industry"
-    description = "获取申万一到三级行业成份数据（含行业层级）"
 
     def __init__(self, tasks=None, update=False):
         # 兼容调度器，但实际不使用 tasks
