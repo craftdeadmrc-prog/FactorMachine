@@ -118,7 +118,7 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                 WHERE symbol = '{symbol}'
             """
             try:
-                df = load_dataframe(sql, market=self.market)  # 需要从任务中获取 market，这里使用 self.market（已在基类中定义）
+                df = load_dataframe(sql, db=self.market)  # 需要从任务中获取 market，这里使用 self.market（已在基类中定义）
                 if df.empty or df.iloc[0]["max_date"] is None:
                     # 无历史数据，保留原任务
                     new_tasks.append(task)
@@ -199,7 +199,7 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                     save_dataframe(
                         df,
                         table_name=self.table_name,
-                        market="fund",  # 市场名，对应数据库文件 fund.duckdb
+                        db="fund",  # 市场名，对应数据库文件 fund.duckdb
                         primary_key=["symbol", "date", "stock_id"]
                     )
                     logger.info(f"基金 {symbol} {year} 年持仓数据已保存，共 {len(df)} 条")

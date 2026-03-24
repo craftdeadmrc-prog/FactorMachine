@@ -90,7 +90,7 @@ class StockValueEmSpider(BaseSpider):
                 save_dataframe(
                     df,
                     table_name=self.table_name,
-                    market=self.market,
+                    db=self.market,
                     primary_key=["symbol", "date"]
                 )
                 logger.info(f"股票 {symbol} 估值数据已保存，共 {len(df)} 条")

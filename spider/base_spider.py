@@ -45,7 +45,7 @@ class BaseSpider(abc.ABC):
             LIMIT 1
         """
         try:
-            df = load_dataframe(sql, market=self.market)
+            df = load_dataframe(sql, db=self.market)
             return not df.empty
         except Exception as e:
             logger.error(f"Failed to check completeness for {symbol}: {e}")

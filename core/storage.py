@@ -19,7 +19,7 @@ def _get_db_path(market: str) -> str:
     """获取市场对应的DuckDB文件路径"""
     return os.path.join(DATA_PATH, f"{market}.duckdb")
 
-def save_dataframe(df: pd.DataFrame, table_name: str, market: str, primary_key: list = None):
+def save_dataframe(df: pd.DataFrame, table_name: str, db: str, primary_key: list = None):
     """
     将DataFrame写入指定市场的指定表。
     如果表不存在则自动创建，数据类型根据df的dtype映射。
@@ -30,9 +30,9 @@ def save_dataframe(df: pd.DataFrame, table_name: str, market: str, primary_key: 
     if df is None or df.empty:
         return
 
-    lock = _get_lock(market)
+    lock = _get_lock(db)
     with lock:  # 确保同一市场内创建表的操作是串行的
-        db_path = _get_db_path(market)
+        db_path = _get_db_path(db)
         con = duckdb.connect(db_path)
         try:
             # 构建列定义
@@ -66,11 +66,11 @@ def save_dataframe(df: pd.DataFrame, table_name: str, market: str, primary_key: 
         finally:
             con.close()
 
-def load_dataframe(sql: str, market: str) -> pd.DataFrame:
+def load_dataframe(sql: str, db: str) -> pd.DataFrame:
     """
     执行SQL查询，返回结果DataFrame。
     """
-    db_path = _get_db_path(market)
+    db_path = _get_db_path(db)
     if not os.path.exists(db_path):
         return pd.DataFrame()
     con = duckdb.connect(db_path)

@@ -98,7 +98,7 @@ class EtfDailySinaSpider(BaseSpider):
                 save_dataframe(
                     df,
                     table_name=self.table_name,
-                    market=self.market,          # 基类传入的市场（如 fund）
+                    db=self.market,          # 基类传入的市场（如 fund）
                     primary_key=["symbol", "date"]
                 )
                 logger.info(f"ETF {code} 日线数据已保存，共 {len(df)} 条")

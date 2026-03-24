@@ -58,7 +58,7 @@ class SwIndexConsSpider(BaseSpider):
             LIMIT 1
         """
         try:
-            df = load_dataframe(sql, market=self.market)
+            df = load_dataframe(sql, db=self.market)
             if df.notna().any().all() and not self.update: # 全部不为空，且不是更新模式，说明数据完整
                 logger.info(f"行业数据完整，跳过")
                 self.tasks = []  # 没有数据，全部任务都需要执行
@@ -146,7 +146,7 @@ class SwIndexConsSpider(BaseSpider):
                     save_dataframe(
                         cons_df,
                         table_name=self.table_name,
-                        market="ashare",
+                        db="ashare",
                         primary_key=["symbol", "date", "market"]
                     )
                     logger.info(f"行业 {symbol} 数据已保存，共 {len(cons_df)} 条记录")

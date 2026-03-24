@@ -335,7 +335,7 @@ class StockFinancialReportSpider(BaseSpider):
                 try:
                     # 直接查询并捕获异常
                     sql = f"SELECT 1 FROM {table_name} WHERE symbol = '{symbol}' LIMIT 1"
-                    df = load_dataframe(sql, market=self.market)
+                    df = load_dataframe(sql, db=self.market)
                     if df.empty:
                         # 表存在但无该 symbol 的数据
                         all_tables_have_data = False
@@ -409,7 +409,7 @@ class StockFinancialReportSpider(BaseSpider):
                     save_dataframe(
                         df,
                         table_name=table_name,
-                        market="ashare",
+                        db="ashare",
                         primary_key=["symbol", "date"]
                     )
                     logger.info(f"股票 {symbol} {report_type_cn} 数据已保存，共 {len(df)} 条")
@@ -433,7 +433,7 @@ class StockFinancialReportSpider(BaseSpider):
             try:
                 # 查询一行数据，获取列名
                 sample_sql = f"SELECT * FROM {table_name} LIMIT 1"
-                sample_df = load_dataframe(sample_sql, market=self.market)
+                sample_df = load_dataframe(sample_sql, db=self.market)
                 if sample_df.empty:
                     # 表为空，无法检查全空列，跳过
                     logger.info(f"表 {table_name} 为空，跳过全空列检查")
@@ -452,7 +452,7 @@ class StockFinancialReportSpider(BaseSpider):
                 # 查询该列非空记录数
                 check_sql = f"SELECT COUNT(*) FROM {table_name} WHERE {col} IS NOT NULL"
                 try:
-                    count_df = load_dataframe(check_sql, market=self.market)
+                    count_df = load_dataframe(check_sql, db=self.market)
                     non_null_count = count_df.iloc[0, 0] if not count_df.empty else 0
                     if non_null_count == 0:
                         columns_to_report.append(col)

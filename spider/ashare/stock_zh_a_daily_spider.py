@@ -67,7 +67,7 @@ class StockDailySpider(BaseSpider):
                 LIMIT 1
             """
             try:
-                df = load_dataframe(sql, market=self.market)
+                df = load_dataframe(sql, db=self.market)
                 if df.empty:
                     factor_missing_tasks.append(task)
                     logger.info(f"Factor data missing for {symbol}, will fetch")
@@ -129,7 +129,7 @@ class StockDailySpider(BaseSpider):
                 save_dataframe(
                     df,
                     table_name=self.table_name,
-                    market=self.market,
+                    db=self.market,
                     primary_key=["symbol", "date"]
                 )
                 logger.info(f"股票 {code} 日线数据已保存，共 {len(df)} 条")
@@ -171,7 +171,7 @@ class StockDailySpider(BaseSpider):
                 save_dataframe(
                     adjust_df,
                     table_name=self.factor_table_name,
-                    market=self.market,
+                    db=self.market,
                     primary_key=["symbol", "date"]
                 )
                 logger.info(f"股票 {code} 前后复权因子已保存，共 {len(adjust_df)} 条")

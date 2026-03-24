@@ -186,7 +186,7 @@ class StockFinancialAbstractSpider(BaseSpider):
                     save_dataframe(
                         df_pivot,
                         table_name=table_name,
-                        market="ashare",
+                        db="ashare",
                         primary_key=["symbol", "date"]
                     )
                     logger.info(f"股票 {symbol} {table_cn} 数据已保存，共 {len(df_pivot)} 条")

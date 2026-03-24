@@ -88,7 +88,7 @@ def _fetch_fund_symbols():
                 save_dataframe(
                     df,
                     table_name="kline_daily",
-                    market="fund",          # 基类市场标识
+                    db="fund",          # 基类市场标识
                     primary_key=["symbol", "date"]
                 )
                 logger.info(f"ETF {code} 日线数据已保存，共 {len(df)} 条")

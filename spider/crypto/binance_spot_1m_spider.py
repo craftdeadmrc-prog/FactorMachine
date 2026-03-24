@@ -124,7 +124,7 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         """查询数据库中该 symbol 的最新日期"""
         sql = f"SELECT MAX(date) as latest FROM {self.table_name} WHERE symbol = '{symbol}'"
         try:
-            df = load_dataframe(sql, market=self.market)
+            df = load_dataframe(sql, db=self.market)
             if not df.empty and df.iloc[0]['latest'] is not pd.NaT:
                 return pd.to_datetime(df.iloc[0]['latest']).to_pydatetime()
         except Exception as e:
@@ -244,7 +244,7 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
                         save_dataframe(
                             df,
                             table_name=self.table_name,
-                            market=self.market,
+                            db=self.market,
                             primary_key=["symbol", "date"]
                         )
                         logger.info(f"{symbol} {date_str} 数据已保存，共 {len(df)} 条")
