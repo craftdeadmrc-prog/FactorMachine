@@ -57,12 +57,13 @@ class BaseSpider(abc.ABC):
             return
 
         new_tasks = []
+        skip_tasks = []
         for task in self.tasks:
             symbol = task['symbol']
             if self._is_data_complete(symbol):
-                logger.info(f"Data for {symbol} already complete, skipping")
+                skip_tasks.append(symbol)
             else:
                 new_tasks.append(task)
-
+        logger.info(f"Data for {skip_tasks} already complete, skipping")
         self.tasks = new_tasks
         logger.info(f"After check, {len(self.tasks)} tasks remain for {self.market}")

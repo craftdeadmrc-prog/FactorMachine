@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 @task(description="获取A股日线行情及复权因子")
 class StockDailySpider(BaseSpider):
     resource = "ashare_sina"
-    table_name = "kline_daily"
+    table_name = "kline_1d"
     factor_table_name = "adjust_factor"
 
     def __init__(self, tasks: List[Dict] = None, update: bool = False):

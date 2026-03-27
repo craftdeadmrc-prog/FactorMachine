@@ -46,7 +46,7 @@ def _fetch_ashare_symbols():
     return symbols
 
 def _fetch_fund_symbols():
-    """获取基金代码列表，并发获取上市日期，并将日线数据写入kline_daily表"""
+    """获取基金代码列表，并发获取上市日期，并将日线数据写入kline_1d表"""
     symbols = []
     try:
         for fund_type in ['ETF基金', 'LOF基金']:
@@ -69,7 +69,7 @@ def _fetch_fund_symbols():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def fetch_date(market, symbol):
-        """获取日线数据，保存到kline_daily，返回最早日期"""
+        """获取日线数据，保存到kline_1d，返回最早日期"""
         code = f"{market}{symbol}"
         try:
             df = proxy_pool(ak.fund_etf_hist_sina, symbol=code)
@@ -83,11 +83,11 @@ def _fetch_fund_symbols():
             df["symbol"] = symbol
             df["market"] = market          # 统一市场标识为 fund
 
-            # 写入kline_daily表
+            # 写入kline_1d表
             try:
                 save_dataframe(
                     df,
-                    table_name="kline_daily",
+                    table_name="kline_1d",
                     db="fund",          # 基类市场标识
                     primary_key=["symbol", "date"]
                 )
@@ -260,7 +260,7 @@ async def _process_market(market, fetch_func, update):
             df = await asyncio.to_thread(
                 load_dataframe,
                 f"SELECT market, symbol FROM symbols",
-                market=market
+                db=market
             )
             if not df.empty and not df.isna().any().any():
                 logger.info(f"Symbols for {market} already exist and are complete. Skipping.")

@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FactorMachine Panel</title>
+    <style>
+        :root {
+            --primary-color: #1890ff;
+            --bg-color: #f0f2f5;
+            --card-bg: #ffffff;
+            --text-color: #000000d9;
+            --border-color: #d9d9d9;
+            --success-color: #52c41a;
+            --error-color: #ff4d4f;
+            --idle-color: #bfbfbf;
+            --selected-bg: #e6f7ff;
+            --selected-border: #1890ff;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 200px;
+            background: #001529;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .logo {
+            height: 64px;
+            line-height: 64px;
+            padding-left: 24px;
+            font-size: 20px;
+            font-weight: bold;
+            background: #002140;
+        }
+
+        .nav-item {
+            padding: 15px 24px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .nav-item:hover, .nav-item.active {
+            background-color: var(--primary-color);
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            height: 64px;
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            font-size: 18px;
+            font-weight: 500;
+        }
+
+        .content-body {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        /* Dashboard View */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 3fr 1fr;
+            gap: 24px;
+            height: 100%;
+            min-height: 0;
+        }
+
+        .task-status-container {
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 4px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            align-content: start;
+        }
+
+        .schedule-panel {
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Task Card (Dashboard) */
+        .task-card {
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #fafafa;
+            transition: all 0.3s;
+            min-width: 0; 
+        }
+        
+        .task-card:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            border-color: var(--primary-color);
+        }
+
+        .task-info {
+            display: flex;
+            align-items: center;
+            overflow: hidden;
+            flex: 1;
+        }
+
+        .task-name {
+            font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+
+        .status-green { background-color: var(--success-color); }
+        .status-red { background-color: var(--error-color); }
+        .status-gray { background-color: var(--idle-color); }
+
+        /* Task Execution View */
+        .task-exec-layout {
+            display: grid;
+            grid-template-columns: 280px 1fr; /* 加宽左侧列表 */
+            gap: 24px;
+            height: 100%;
+        }
+
+        .task-list-panel {
+            background: var(--card-bg);
+            padding: 16px;
+            border-radius: 4px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .task-config-panel {
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .folder-group {
+            margin-bottom: 16px;
+        }
+        .folder-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: var(--primary-color);
+            font-size: 14px;
+            text-transform: uppercase;
+        }
+
+        /* Task Item (Clickable Row) */
+        .task-item {
+            padding: 10px 12px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .task-item:hover {
+            background-color: #f5f5f5;
+        }
+
+        .task-item.selected {
+            background-color: var(--selected-bg);
+            border-color: var(--selected-border);
+            color: var(--primary-color);
+        }
+
+        .task-item-icon {
+            margin-right: 8px;
+            font-size: 12px;
+            opacity: 0.5;
+        }
+        
+        .task-item.selected .task-item-icon {
+            opacity: 1;
+            color: var(--primary-color);
+        }
+
+        /* Control Buttons in List */
+        .list-controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .btn-xs {
+            padding: 4px 8px;
+            font-size: 12px;
+            border: 1px solid var(--border-color);
+            background: white;
+            border-radius: 2px;
+            cursor: pointer;
+            flex: 1;
+        }
+        .btn-xs:hover {
+            color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+
+        /* Form Elements */
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        label {
+            font-weight: 500;
+        }
+        input, select, textarea {
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+        }
+        button.btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            align-self: flex-start;
+        }
+        button.btn-primary:hover {
+            opacity: 0.9;
+        }
+        button.btn-danger {
+            background-color: var(--error-color);
+            color: white;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        button.btn-danger:hover {
+            opacity: 0.8;
+        }
+
+        /* Logs View */
+        .log-list {
+            background: var(--card-bg);
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .log-item {
+            padding: 12px 24px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .log-item:hover {
+            background-color: #fafafa;
+        }
+        .log-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .log-detail {
+            margin-top: 16px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 16px;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            height: 400px;
+            overflow-y: auto;
+            display: none;
+        }
+        .log-detail.open {
+            display: block;
+        }
+        
+        /* Utility */
+        .hidden { display: none !important; }
+        .h-full { height: 100%; }
+    </style>
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="logo">FactorMachine</div>
+        <div class="nav-item active" onclick="switchView('dashboard', this)">首页状态</div>
+        <div class="nav-item" onclick="switchView('tasks', this)">任务执行</div>
+        <div class="nav-item" onclick="switchView('logs', this)">日志查看</div>
+        <div class="nav-item" onclick="alert('功能开发中...')">因子分析</div>
+        <div class="nav-item" onclick="alert('功能开发中...')">策略回测</div>
+        <div class="nav-item" onclick="alert('功能开发中...')">实盘监控</div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="header" id="page-title">首页状态</div>
+        <div class="content-body">
+            
+            <!-- View: Dashboard -->
+            <div id="view-dashboard" class="h-full">
+                <div class="dashboard-grid">
+                    <div class="task-status-container" id="status-grid">
+                        <!-- Status cards injected here -->
+                    </div>
+                    <div class="schedule-panel">
+                        <h3>定时任务</h3>
+                        <div id="schedule-list" style="margin-top: 16px; flex: 1; overflow-y: auto;">
+                            <!-- Schedules injected here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- View: Tasks -->
+            <div id="view-tasks" class="h-full hidden">
+                <div class="task-exec-layout">
+                    <div class="task-list-panel" id="task-selection-list">
+                        <!-- Controls -->
+                        <div class="list-controls">
+                            <button class="btn-xs" onclick="selectAllTasks()">全选</button>
+                            <button class="btn-xs" onclick="clearSelection()">清空</button>
+                        </div>
+                        <!-- Task Items injected here -->
+                    </div>
+                    <div class="task-config-panel">
+                        <h3>执行配置</h3>
+                        <div class="form-group">
+                            <label>代码 (留空则全市场)</label>
+                            <textarea id="exec-symbols" rows="3" placeholder="留空则自动获取选中任务所属市场所有代码，或输入特定代码：600000, 000001"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>起始日期 (选填)</label>
+                            <input type="date" id="exec-start-date">
+                            <small style="color: #888;">留空则从数据库读取上市日期</small>
+                        </div>
+                        <div class="form-group">
+                            <label>结束日期 (选填)</label>
+                            <input type="date" id="exec-end-date">
+                            <small style="color: #888;">留空则默认为今日</small>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="exec-update"> 强制更新
+                            </label>
+                        </div>
+                        
+                        <div style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 20px;">
+                            <h4>添加定时任务</h4>
+                            <div class="form-group">
+                                <label>Cron 表达式</label>
+                                <input type="text" id="schedule-cron" placeholder="*/5 * * * *">
+                            </div>
+                        </div>
+
+                        <button class="btn-primary" onclick="submitExecution()">立即执行</button>
+                        <button class="btn-primary" style="background-color: #52c41a;" onclick="submitSchedule()">添加定时任务</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- View: Logs -->
+            <div id="view-logs" class="h-full hidden">
+                <div class="log-list" id="log-list-container" style="flex:1; overflow-y:auto;">
+                    <!-- Log items injected here -->
+                </div>
+                <div id="log-detail-view" class="log-detail"></div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // State
+        let currentTasks = {}; // 存储任务结构以便快速查找
+        let selectedTaskNames = new Set();
+        let statusInterval = null;
+
+        // Initialization
+        document.addEventListener('DOMContentLoaded', () => {
+            loadTasks();
+            startStatusPolling();
+        });
+
+        // Navigation
+        function switchView(viewName, navEl) {
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            navEl.classList.add('active');
+
+            document.getElementById('view-dashboard').classList.add('hidden');
+            document.getElementById('view-tasks').classList.add('hidden');
+            document.getElementById('view-logs').classList.add('hidden');
+            
+            document.getElementById(`view-${viewName}`).classList.remove('hidden');
+
+            const titles = {
+                'dashboard': '首页状态',
+                'tasks': '任务执行',
+                'logs': '日志查看'
+            };
+            document.getElementById('page-title').innerText = titles[viewName];
+
+            if (viewName === 'logs') loadLogsList();
+        }
+
+        // API: Load Tasks for Selection
+        async function loadTasks() {
+            try {
+                const res = await fetch('/api/tasks');
+                const data = await res.json();
+                const container = document.getElementById('task-selection-list');
+                // 保留控制按钮，清空其他
+                const controls = container.querySelector('.list-controls');
+                container.innerHTML = '';
+                container.appendChild(controls);
+                
+                currentTasks = {}; // 重置缓存
+
+                // 定义渲染顺序：System 优先，然后是其他市场
+                const groupOrder = ["System", "ashare", "fund", "crypto"];
+                
+                // 收集所有存在的 group key
+                const allGroups = Object.keys(data);
+                
+                // 按照自定义顺序排序，未定义顺序的排在后面
+                allGroups.sort((a, b) => {
+                    const idxA = groupOrder.indexOf(a);
+                    const idxB = groupOrder.indexOf(b);
+                    if (idxA === -1 && idxB === -1) return a.localeCompare(b);
+                    if (idxA === -1) return 1;
+                    if (idxB === -1) return -1;
+                    return idxA - idxB;
+                });
+
+                for (const groupName of allGroups) {
+                    const group = document.createElement('div');
+                    group.className = 'folder-group';
+                    
+                    const title = document.createElement('div');
+                    title.className = 'folder-title';
+                    title.innerText = groupName === "System" ? "系统任务" : groupName.toUpperCase();
+                    group.appendChild(title);
+
+                    const tasks = data[groupName];
+                    tasks.forEach(task => {
+                        currentTasks[task.name] = task; // 缓存
+
+                        const item = document.createElement('div');
+                        item.className = 'task-item';
+                        item.dataset.name = task.name;
+                        item.onclick = (e) => toggleSelection(task.name, item);
+                        
+                        // 初始化选中状态（默认不选，除非需要持久化）
+                        // item.classList.toggle('selected', selectedTaskNames.has(task.name));
+
+                        item.innerHTML = `
+                            <div style="display:flex; align-items:center; overflow:hidden;">
+                                <span class="task-item-icon">○</span>
+                                <span style="font-weight:500;">${task.name}</span>
+                            </div>
+                            <small style="color:#888; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 100px;">${task.description}</small>
+                        `;
+                        group.appendChild(item);
+                    });
+                    container.appendChild(group);
+                }
+            } catch (e) {
+                console.error('Failed to load tasks:', e);
+            }
+        }
+
+        // Selection Logic
+        function toggleSelection(taskName, itemElement) {
+            if (selectedTaskNames.has(taskName)) {
+                selectedTaskNames.delete(taskName);
+                itemElement.classList.remove('selected');
+                itemElement.querySelector('.task-item-icon').innerText = '○';
+            } else {
+                selectedTaskNames.add(taskName);
+                itemElement.classList.add('selected');
+                itemElement.querySelector('.task-item-icon').innerText = '●';
+            }
+        }
+
+        function selectAllTasks() {
+            document.querySelectorAll('.task-item').forEach(item => {
+                const name = item.dataset.name;
+                if (!selectedTaskNames.has(name)) {
+                    selectedTaskNames.add(name);
+                    item.classList.add('selected');
+                    item.querySelector('.task-item-icon').innerText = '●';
+                }
+            });
+        }
+
+        function clearSelection() {
+            selectedTaskNames.clear();
+            document.querySelectorAll('.task-item').forEach(item => {
+                item.classList.remove('selected');
+                item.querySelector('.task-item-icon').innerText = '○';
+            });
+        }
+
+        // API: Status Polling
+        function startStatusPolling() {
+            updateStatus();
+            statusInterval = setInterval(updateStatus, 5000);
+        }
+
+        async function updateStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                
+                const grid = document.getElementById('status-grid');
+                grid.innerHTML = '';
+                
+                data.tasks.forEach(task => {
+                    const card = document.createElement('div');
+                    card.className = 'task-card';
+                    const colorClass = `status-${task.color}`; 
+                    
+                    card.innerHTML = `
+                        <div class="task-info">
+                            <span class="status-dot ${colorClass}"></span>
+                            <span class="task-name" title="${task.name}">${task.name}</span>
+                        </div>
+                        <div style="font-size:12px; color:#888; white-space:nowrap; margin-left:8px;">${task.status}</div>
+                    `;
+                    grid.appendChild(card);
+                });
+
+                const scheduleList = document.getElementById('schedule-list');
+                scheduleList.innerHTML = '';
+                if (data.schedules.length === 0) {
+                    scheduleList.innerHTML = '<div style="color:#999">无定时任务</div>';
+                } else {
+                    data.schedules.forEach(sch => {
+                        const item = document.createElement('div');
+                        item.style.padding = '8px 0';
+                        item.style.borderBottom = '1px solid #eee';
+                        item.innerHTML = `
+                            <div style="font-size:14px; word-break: break-all;">${sch.id}</div>
+                            <div style="font-size:12px; color:#999">${sch.next_run_time}</div>
+                        `;
+                        scheduleList.appendChild(item);
+                    });
+                }
+
+            } catch (e) {
+                console.error('Status update failed:', e);
+            }
+        }
+
+        // Logic: Run Task
+        async function submitExecution() {
+            if (selectedTaskNames.size === 0) {
+                alert('请至少选择一个任务');
+                return;
+            }
+
+            const taskNames = Array.from(selectedTaskNames);
+            const symbolsRaw = document.getElementById('exec-symbols').value;
+            const startDate = document.getElementById('exec-start-date').value || null;
+            const endDate = document.getElementById('exec-end-date').value || null;
+            const update = document.getElementById('exec-update').checked;
+
+            const symbols = symbolsRaw.split(/[\n,]+/).map(s => s.trim()).filter(s => s);
+
+            const payload = {
+                task_names: taskNames,
+                symbols: symbols, 
+                start_date: startDate,
+                end_date: endDate,
+                update: update
+            };
+
+            try {
+                const res = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const result = await res.json();
+                alert(result.message);
+                // 切换到首页查看状态
+                document.querySelector('.nav-item').click(); 
+            } catch (e) {
+                alert('执行失败: ' + e.message);
+            }
+        }
+
+        // Logic: Add Schedule
+        async function submitSchedule() {
+            if (selectedTaskNames.size !== 1) {
+                alert('添加定时任务请仅选择一个任务');
+                return;
+            }
+            
+            const taskName = Array.from(selectedTaskNames)[0];
+            const cron = document.getElementById('schedule-cron').value;
+            
+            if (!cron) {
+                alert('请输入 Cron 表达式');
+                return;
+            }
+
+            const symbolsRaw = document.getElementById('exec-symbols').value;
+            const symbols = symbolsRaw.split(/[\n,]+/).map(s => s.trim()).filter(s => s);
+            const startDate = document.getElementById('exec-start-date').value || null;
+            const endDate = document.getElementById('exec-end-date').value || null;
+            const update = document.getElementById('exec-update').checked;
+
+            const payload = {
+                task_name: taskName,
+                cron_expression: cron,
+                params: {
+                    task_names: [taskName],
+                    symbols: symbols, 
+                    start_date: startDate,
+                    end_date: endDate,
+                    update: update
+                }
+            };
+
+            try {
+                const res = await fetch('/api/schedule', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const result = await res.json();
+                alert(result.message);
+            } catch (e) {
+                alert('添加定时任务失败: ' + e.message);
+            }
+        }
+
+        // Logic: Logs
+        async function loadLogsList() {
+            try {
+                const res = await fetch('/api/tasks');
+                const data = await res.json();
+                const container = document.getElementById('log-list-container');
+                container.innerHTML = '';
+
+                const allTasks = [];
+                Object.values(data).forEach(arr => allTasks.push(...arr));
+
+                allTasks.forEach(task => {
+                    const item = document.createElement('div');
+                    item.className = 'log-item';
+                    item.innerHTML = `
+                        <span>${task.name}</span>
+                        <div class="log-actions">
+                            <button class="btn-danger" onclick="event.stopPropagation(); clearLogs('${task.name}')">清理日志</button>
+                            <span style="color:#999">></span>
+                        </div>
+                    `;
+                    item.onclick = () => loadLogDetail(task.name, item);
+                    container.appendChild(item);
+                });
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function clearLogs(taskName) {
+            if(!confirm(`确定要清理任务 [${taskName}] 的所有日志吗？此操作不可恢复。`)) {
+                return;
+            }
+            try {
+                const res = await fetch(`/api/logs/${taskName}`, {
+                    method: 'DELETE'
+                });
+                if (res.ok) {
+                    alert('日志清理成功');
+                    document.getElementById('log-detail-view').innerText = '';
+                    document.getElementById('log-detail-view').classList.remove('open');
+                } else {
+                    const data = await res.json();
+                    alert('清理失败: ' + (data.detail || '未知错误'));
+                }
+            } catch (e) {
+                alert('清理失败: ' + e.message);
+            }
+        }
+
+        async function loadLogDetail(taskName, itemElement) {
+            const detail = document.getElementById('log-detail-view');
+            detail.classList.add('open');
+            detail.innerText = 'Loading...';
+
+            try {
+                const res = await fetch(`/api/logs/${taskName}`);
+                const data = await res.json();
+                
+                if (data.logs && data.logs.length > 0) {
+                    const text = data.logs.map(log => 
+                        `[${log.date}] [${log.level}] ${log.message}`
+                    ).reverse().join('\n');
+                    detail.innerText = text;
+                } else if (data.error) {
+                    detail.innerText = `Info: ${data.error}`;
+                } else {
+                    detail.innerText = 'No logs found.';
+                }
+            } catch (e) {
+                detail.innerText = 'Failed to fetch logs.';
+            }
+        }
+    </script>
+</body>
+</html>

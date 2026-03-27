@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 @task(description="获取ETF日线行情数据（新浪）")
 class EtfDailySinaSpider(BaseSpider):
     resource = "fund_sina"
-    table_name = "kline_daily"
+    table_name = "kline_1d"
 
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)

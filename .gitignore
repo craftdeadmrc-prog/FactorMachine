@@ -1,5 +1,3 @@
-all_factors.txt
-output.py
 *__pycache__*
 data
 spider/deprecated
