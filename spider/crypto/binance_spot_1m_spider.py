@@ -28,7 +28,7 @@ START_DATE_DEFAULT = datetime(2017, 8, 17)   # 数据最早起始日
 @task(description="获取币安现货1分钟K线数据（日粒度ZIP包）")
 class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
     resource = "spot_binance"
-    table_name = "spot_kline_1m"
+    table_name = "kline_1m"
     temp_dir = os.path.join(DATA_PATH, "crypto_binance_temp")
     os.makedirs(temp_dir, exist_ok=True)
 
@@ -121,63 +121,71 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
     # ---------- 数据库最新日期查询 ----------
     def _get_latest_date(self, symbol: str) -> Optional[datetime]:
         """查询数据库中该 symbol 的最新日期"""
-        sql = f"SELECT MAX(date) as latest FROM {self.table_name} WHERE symbol = '{symbol}'"
+        sql = f"SELECT MAX(date) FROM symbols WHERE symbol = '{symbol}'"
         try:
             df = load_dataframe(sql, db=self.market)
-            if not df.empty and df.iloc[0]['latest'] is not pd.NaT:
-                return pd.to_datetime(df.iloc[0]['latest']).to_pydatetime()
+            return df["date"][0]
         except Exception as e:
             logger.error(f"查询 {symbol} 最新日期失败: {e}")
         return None
 
-    # ---------- 数据检查与任务调整 ----------
-    def check(self):
-        """不调用父类 check，独立实现退市检测和起始日期调整"""
+    # ---------- 异步验证函数（封装） ----------
+    async def _check_symbol_async(self, symbol: str, yesterday: datetime) -> Optional[Dict]:
+        """
+        异步检查单个 symbol：
+         - 检查昨日文件是否存在（退市检测）
+         - 查询数据库最新日期
+         - 如果需要处理，返回任务字典；否则返回 None
+        """
+        # 1. 检查昨日文件是否存在
+        date_str = yesterday.strftime("%Y-%m-%d")
+        url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/1m/{symbol}-1m-{date_str}.zip"
+        try:
+            status = await asyncio.to_thread(proxy_pool, self._head_request_sync, url)
+            if status != 200:
+                logger.info(f"{symbol} 昨日文件不存在，视为退市，移除任务")
+                return None
+        except Exception as e:
+            logger.error(f"检查 {symbol} 昨日文件失败: {e}")
+            return None
+
+        # 2. 查询数据库最新日期
+        latest = await asyncio.to_thread(self._get_latest_date, symbol)
+        if latest is None or latest < yesterday:
+            if latest is None:
+                start = START_DATE_DEFAULT
+            else:
+                start = latest
+            logger.info(f"{symbol} 保留任务，起始日期 {start.strftime('%Y-%m-%d')} 至 {yesterday.strftime('%Y-%m-%d')}")
+            return {
+                'symbol': symbol,
+                'market': self.market,
+                'start_date': start,
+                'end_date': yesterday
+            }
+        else:
+            logger.info(f"{symbol} 数据已完整到昨日，移除任务")
+            return None
+
+    # ---------- 数据检查与任务调整（异步版） ----------
+    async def check(self):
+        """异步检查任务，根据昨日文件和数据库最新日期调整任务列表"""
         if not self.tasks:
             logger.info("无任务，跳过 check")
             return
-
         yesterday = datetime.now() - timedelta(days=1)
-        new_tasks = []
+        # 并发检查所有任务
+        check_tasks = [self._check_symbol_async(task['symbol'], yesterday) for task in self.tasks]
+        results = await asyncio.gather(*check_tasks)
 
-        for task in self.tasks:
-            symbol = task['symbol']
-            # 1. 检查昨日文件是否存在（退市检测）
-            date_str = yesterday.strftime("%Y-%m-%d")
-            url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/1m/{symbol}-1m-{date_str}.zip"
-            try:
-                status = proxy_pool(self._head_request_sync, url)
-                if status != 200:
-                    logger.info(f"{symbol} 昨日文件不存在，视为退市，移除任务")
-                    continue
-            except Exception as e:
-                logger.error(f"检查 {symbol} 昨日文件失败: {e}")
-                continue
-
-            # 2. 昨日文件存在，查询数据库最新日期
-            latest = self._get_latest_date(symbol)
-            if latest is None or latest < yesterday:
-                # 数据缺失或未到昨日，保留任务，调整起始日期
-                if latest is None:
-                    start = START_DATE_DEFAULT
-                else:
-                    # 起始日期设为最新日期当日（重新抓取该日及以后）
-                    start = latest
-                new_tasks.append({
-                    'symbol': symbol,
-                    'market': self.market,
-                    'start_date': start,
-                    'end_date': yesterday
-                })
-                logger.info(f"{symbol} 保留任务，起始日期 {start.strftime('%Y-%m-%d')} 至 {yesterday.strftime('%Y-%m-%d')}")
-            else:
-                logger.info(f"{symbol} 数据已完整到昨日，移除任务")
-
+        # 收集需要保留的任务
+        new_tasks = [res for res in results if res is not None]
         self.tasks = new_tasks
         logger.info(f"check 后剩余 {len(self.tasks)} 个任务")
+        
 
     async def process_symbol(self, symbol: str, start_date: datetime, end_date: datetime,
-                            session: aiohttp.ClientSession):
+                        session: aiohttp.ClientSession):
         # 1. 获取该 symbol 所有存在的 ZIP 文件 Key
         try:
             keys = await asyncio.to_thread(self._get_zip_keys_for_symbol_sync, symbol)
@@ -185,34 +193,22 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
             logger.error(f"获取 {symbol} 文件列表失败: {e}")
             return
 
-        # 提取日期集合
-        existing_dates = set()
+        # 提取已存在的日期集合（date 对象）
+        existing_dates = []
         for key in keys:
             parts = key.split('/')[-1].split('-')
             if len(parts) >= 3:
                 try:
                     date_str = parts[-3] + '-' + parts[-2] + '-' + parts[-1].replace('.zip', '')
-                    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-                    existing_dates.add(date_obj.date())
+                    date_obj = pd.to_datetime(date_str)
+                    existing_dates.append(date_obj)
                 except:
                     pass
-
-        # 2. 构建需要处理的日期列表
-        current = start_date
-        one_day = timedelta(days=1)
-        dates_to_process = []
-        while current <= end_date:
-            if current.date() in existing_dates:
-                dates_to_process.append(current)
-            current += one_day
-
-        if not dates_to_process:
-            logger.info(f"{symbol} 无新数据需要处理")
-            return
-
-        # 3. 并发控制
-        max_concurrent = 5  # 每个 symbol 内部最多同时下载5个zip
-        semaphore = asyncio.Semaphore(max_concurrent)
+        # 2. 高效筛选需要处理的日期（仅遍历已存在日期，而非遍历时间区间）
+        dates_to_process = [d for d in existing_dates if start_date <= d <= end_date]
+        
+        # 3. 并发控制（使用全局配置的并发数）, 经实际测试判断消耗并不大且无严苛反爬，因此选择更高并发而不继承信号量
+        semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
         async def process_one_date(date_obj: datetime):
             async with semaphore:

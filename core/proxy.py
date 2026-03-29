@@ -1,4 +1,3 @@
-# core/proxy.py
 import logging
 import threading
 import time
@@ -65,17 +64,45 @@ def _patched_request(self, method, url, **kwargs):
 # 应用猴子补丁（全局一次）
 requests.Session.request = _patched_request
 
+def _get_callable_name(func):
+    """获取可调用对象的友好名称，优先使用 __name__，lambda 特殊处理"""
+    if hasattr(func, '__name__'):
+        name = func.__name__
+        if name == '<lambda>':
+            name = func.__qualname__
+        return ".".join(func.__qualname__.split(".")[:1])
+    elif hasattr(func, '__class__'):
+        return func.__class__.__name__
+    else:
+        return str(func)
+
 def proxy_pool(func, *args, **kwargs):
     """
     使用代理池调用函数，自动重试网络异常。
+    优先尝试不使用代理（不记录 INFO 日志，失败快速进入代理循环）。
     :param func: 要调用的函数（如 ak.fund_portfolio_hold_em）
     :param args: 位置参数
     :param kwargs: 关键字参数
     :return: 函数返回值
     """
+    func_name = _get_callable_name(func)
+
+    # 1. 优先尝试无代理直接调用（不记录 INFO 日志，失败不等待）
+    try:
+        set_use_proxy(False)
+        result = func(*args, **kwargs)
+        # 成功直接返回，不打印任何 INFO 日志
+        return result
+    except Exception as e:
+        # 无代理失败，记录 DEBUG 级别日志后继续代理流程
+        logger.debug(f"无代理调用 {func_name} 失败: {e}，将尝试使用代理")
+    # 注意：无代理失败后，use_proxy 标志可能仍为 False，后续代理循环会重新设置
+
     proxies = _proxy_list
     if not proxies:
-        logger.warning("无可用代理，直接调用原始函数")
+        logger.warning("无可用代理，直接调用原始函数（重试无代理）")
+        # 如果没有代理，再次尝试无代理（因为之前可能失败，但可能是临时网络问题）
+        set_use_proxy(False)
         return func(*args, **kwargs)
 
     # 每个线程维护自己的代理索引
@@ -92,16 +119,13 @@ def proxy_pool(func, *args, **kwargs):
             result = func(*args, **kwargs)
             # 成功后更新索引，下次从下一个代理开始
             _thread_local.index = (idx + 1) % len(proxies)
-            logger.info(f"函数 {func.__name__} 使用代理 {proxy} 调用成功")
+            logger.info(f"函数 {func_name} 使用代理 {proxy} 调用成功")
             return result
         except RequestException as e:
-            # 只重试网络相关异常
             logger.warning(f"代理 {proxy} 请求失败: {e}")
-            time.sleep(5)
             continue
         except Exception as e:
-            # 非网络异常，立即抛出（不重试）
-            logger.error(f"函数 {func.__name__} 发生非网络异常: {e}")
+            logger.error(f"函数 {func_name} 发生非网络异常: {e}")
             raise
         finally:
             set_use_proxy(False)

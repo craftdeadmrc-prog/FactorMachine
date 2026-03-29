@@ -65,7 +65,12 @@ class SwIndexConsSpider(BaseSpider):
                 logger.info(f"行业数据完整，跳过")
                 self.tasks = []  # 没有数据，全部任务都需要执行
         except Exception as e:
-            logger.error(f"检查行业数据完整性失败: {e}")
+            error_msg = str(e)
+            # 表不存在是正常情况（首次运行），使用 INFO 级别
+            if "does not exist" in error_msg.lower():
+                logger.info(f"Table {self.table_name} not initialized yet, will fetch all tasks")
+            else:
+                logger.error(f"检查行业数据完整性失败: {e}")
 
     async def run(self) -> None:
         """

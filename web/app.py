@@ -57,7 +57,7 @@ def update_task_status(task_name: str, status: str):
         "last_run": datetime.now().isoformat()
     }
 
-def get_market_from_task_name(task_name: str) -> str:
+def get_db_from_task_name(task_name: str) -> str:
     """根据任务名推断市场 (ashare/fund/crypto)"""
     # 如果是 Init 任务，返回 system
     if task_name == "Init":
@@ -134,15 +134,15 @@ def get_all_tasks():
     # 按市场分组普通任务
     for task in tasks:
         # 获取大市场名称
-        market = get_market_from_task_name(task.name)
+        db = get_db_from_task_name(task.name)
         
-        if market == "unknown":
+        if db == "unknown":
             continue # 跳过无法识别的任务
             
-        if market not in grouped:
-            grouped[market] = []
+        if db not in grouped:
+            grouped[db] = []
             
-        grouped[market].append({
+        grouped[db].append({
             "name": task.name,
             "description": task.description,
             "type": task.type
@@ -223,75 +223,69 @@ def get_status():
 async def run_tasks(request: TaskExecutionRequest, background_tasks: BackgroundTasks):
     """执行选中的任务，支持 Init 任务"""
     if not request.task_names:
-         raise HTTPException(status_code=400, detail="未选择任何任务")
+        raise HTTPException(status_code=400, detail="未选择任何任务")
 
-    # 检查是否包含 Init 任务
+    # 1. 处理 Init 任务（单独处理，不涉及数据库查询）
     has_init = "Init" in request.task_names
     other_tasks = [t for t in request.task_names if t != "Init"]
 
-    # 1. 处理 Init 任务
     if has_init:
         logger.info("Running Init task...")
-        # Init 任务不需要 symbols 和日期参数
         asyncio.create_task(execute_task_wrapper("Init", [], update=True))
 
-    # 2. 处理其他普通爬虫/因子任务
-    if other_tasks:
-        # 推断市场：取第一个非 Init 任务的市场
-        first_task = other_tasks[0]
-        target_market = get_market_from_task_name(first_task)
-        
-        if target_market == "unknown":
-             logger.warning(f"Cannot infer market for {first_task}, skipping standard tasks")
+    # 2. 处理其他普通任务
+    if not other_tasks:
+        return {"message": "Tasks submitted."}
 
-        constructed_tasks = []
-        target_symbols = request.symbols
-        
-        # 如果未传 symbols，则全市场
-        if not target_symbols:
-            try:
-                logger.info(f"No symbols provided, fetching all symbols for market: {target_market}")
-                sql = "SELECT DISTINCT symbol FROM symbols"
-                df_all = load_dataframe(sql, db=target_market)
-                
-                if df_all.empty:
-                    logger.warning(f"Database empty for {target_market}. Standard tasks might fail.")
-                else:
-                    target_symbols = df_all['symbol'].tolist()
-            except Exception as e:
-                logger.error(f"Failed to load symbols: {e}")
+    # 推断市场（取第一个非 Init 任务的市场）
+    first_task = other_tasks[0]
+    db = get_db_from_task_name(first_task)  # 返回 market 名称，如 "ashare", "fund", "crypto"
 
-        if target_symbols:
-            # 构建参数
-            if not request.start_date:
-                try:
-                    symbols_str = ",".join([f"'{s}'" for s in target_symbols])
-                    sql = f"SELECT symbol, date FROM symbols WHERE symbol IN ({symbols_str})"
-                    df_dates = load_dataframe(sql, db=target_market)
-                    date_map = dict(zip(df_dates['symbol'], df_dates['date'])) if not df_dates.empty else {}
-                    
-                    for symbol in target_symbols:
-                        s_date = date_map.get(symbol)
-                        constructed_tasks.append({
-                            "market": target_market,
-                            "symbol": symbol,
-                            "start_date": str(s_date) if pd.notna(s_date) else None,
-                            "end_date": request.end_date
-                        })
-                except Exception as e:
-                    logger.error(f"Date query failed: {e}")
-            else:
-                for symbol in target_symbols:
-                    constructed_tasks.append({
-                        "market": target_market,
-                        "symbol": symbol,
-                        "start_date": request.start_date,
-                        "end_date": request.end_date
-                    })
+    # 准备查询条件
+    symbols = request.symbols if request.symbols else []
+    start_date = request.start_date
+    end_date = request.end_date or pd.to_datetime(datetime.now().date())  # 统一转为 date 对象
 
-            # 启动任务
-            for task_name in other_tasks:
-                asyncio.create_task(execute_task_wrapper(task_name, constructed_tasks, request.update))
+    # 构建 SQL 查询语句
+    if symbols:
+        # 有指定代码列表：仅查询这些代码
+        in_clause = "', '".join([s.replace("'", "''") for s in symbols])  # 防注入
+        sql = f"""
+            SELECT market, symbol, date
+            FROM symbols
+            WHERE symbol IN ('{in_clause}')
+        """
+    else:
+        # 未指定代码：查询该市场所有代码
+        sql = f"""
+            SELECT market, symbol, date
+            FROM symbols
+        """
+
+    try:
+        df = load_dataframe(sql, db=db)
+        tasks = []
+        if df.empty:
+            logger.warning(f"No symbols found for db={db}, symbols={symbols}")
+        else:
+            # 构建任务列表：根据 start_date 是否为空决定使用数据库中的 date 还是用户指定的 start_date
+            for _, row in df.iterrows():
+                market = row["market"]
+                symbol = row["symbol"]
+                # 如果用户提供了 start_date，则使用它；否则使用数据库中的上市日期（可能为空）
+                effective_start = start_date if start_date else (row["date"] if pd.notna(row["date"]) else None)
+                tasks.append({
+                    "market": market,
+                    "symbol": symbol,
+                    "start_date": effective_start,
+                    "end_date": end_date
+                })
+    except Exception as e:
+        logger.error(f"Failed to load symbols for db={db}: {e}")
+        tasks = []
+    # 3. 启动所有其他任务
+    for task_name in other_tasks:
+        asyncio.create_task(execute_task_wrapper(task_name, tasks, request.update))
 
     return {"message": "Tasks submitted."}
 
@@ -299,16 +293,16 @@ async def run_tasks(request: TaskExecutionRequest, background_tasks: BackgroundT
 def clear_task_logs(task_name: str):
     """清理指定任务的日志"""
     try:
-        market = get_market_from_task_name(task_name)
-        if market == "unknown":
+        db = get_db_from_task_name(task_name)
+        if db == "unknown":
             raise HTTPException(status_code=404, detail="Task not found")
 
         # Init 任务通常没有独立的日志数据库表，或者不在这里清理，视情况而定
         # 这里假设 Init 也不需要清理，或者它的日志在 core 层面处理了
-        if market == "system":
+        if db == "system":
             return {"message": "System tasks do not support log clearing via this endpoint."}
 
-        db_name = f"{market}_logs"
+        db_name = f"{db}_logs"
         db_path = os.path.join(DATA_PATH, f"{db_name}.duckdb")
         
         if not os.path.exists(db_path):
@@ -330,13 +324,13 @@ def clear_task_logs(task_name: str):
 def get_task_logs(task_name: str):
     """读取指定任务的日志"""
     try:
-        market = get_market_from_task_name(task_name)
+        db = get_db_from_task_name(task_name)
         
         # Init 任务不支持此查询
-        if market == "system":
+        if db == "system":
              return {"logs": [], "error": "System task logs are not stored in the standard log DB."}
 
-        db_name = f"{market}_logs"
+        db_name = f"{db}_logs"
         sql = f"SELECT * FROM \"{task_name}\" ORDER BY date DESC LIMIT 1000"
         df = load_dataframe(sql, db=db_name)
         return {"logs": df.to_dict(orient="records")}
@@ -374,9 +368,7 @@ async def startup_event():
     # 2. Web 面板启动时必须运行一次 Init
     logger.info("Web panel started. Running initialization task...")
     try:
-        # await core_init.init(update=False)  # 非阻塞方式启动更好，或者直接 await
-        # 为了保证启动时数据就绪，这里直接 await
-        await core_init.init(update=False)
+        asyncio.create_task(core_init.init(update=False))
         logger.info("Initialization task completed on startup.")
     except Exception as e:
         logger.error(f"Initialization failed on startup: {e}")

@@ -342,8 +342,12 @@ class StockFinancialReportSpider(BaseSpider):
                         break
                     # 表存在且有数据，继续下一张表
                 except Exception as e:
-                    # 表不存在或查询失败（如权限不足），视为需要爬取
-                    logger.info(f"表 {table_name} 可能不存在或查询失败: {e}")
+                    error_msg = str(e)
+                    # 表不存在是正常情况（首次运行），使用 INFO 级别
+                    if "does not exist" in error_msg.lower():
+                        logger.info(f"Table {self.table_name} not initialized yet, will fetch all tasks")
+                    else:
+                        logger.error(f"表 {table_name} 查询失败: {e}")
                     all_tables_have_data = False
                     break
 
