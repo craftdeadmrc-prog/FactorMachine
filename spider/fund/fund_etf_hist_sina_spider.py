@@ -27,6 +27,7 @@ class EtfDailySinaSpider(BaseSpider):
         df["date"] = pd.to_datetime(df["date"])
         df["symbol"] = symbol
         df["market"] = market
+        df["volume"] = df["volume"]*100
         df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
         return df
 
@@ -42,7 +43,8 @@ class EtfDailySinaSpider(BaseSpider):
         logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
         for idx, task in enumerate(self.tasks, 1):
-            logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
+            if idx%10==0:
+                logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
 
             market = task['market']
             symbol = task['symbol']

@@ -317,48 +317,46 @@ class StockFinancialReportSpider(BaseSpider):
         return df
 
     def check(self):
+        # 先执行父类检查（可能会处理 update 标志等基础逻辑）
+        super().check()
+        # 1. 收集所有待处理的 symbol
+        symbols = [task['symbol'] for task in self.tasks]
+        # 2. 构建 SQL 批量查询，获取每个 symbol 的最新日期
+        # 使用 IN 子句批量检索
+        in_clause = "', '".join(symbols)
+        sql = f"""
+            SELECT symbol, MAX(date) as date
+            FROM {self.table_names[2]}
+            WHERE symbol IN ('{in_clause}')
+            GROUP BY symbol
         """
-        特殊 check 逻辑：
-        1. 判断每个 symbol 的三张表中是否存在至少一张表数据为空。
-        2. 如果表不存在，也视为需要爬取。
-        若存在上述情况，则保留该 symbol 任务；否则从 self.tasks 中移除。
-        """
-        if not self.tasks:
-            return
-
-        keep_tasks = []
-        for task in self.tasks:
-            symbol = task['symbol']
-            all_tables_have_data = True
-            for table_name in self.table_names:
-                # 先检查表是否存在
-                try:
-                    # 直接查询并捕获异常
-                    sql = f"SELECT 1 FROM {table_name} WHERE symbol = '{symbol}' LIMIT 1"
-                    df = load_dataframe(sql, db=self.market)
-                    if df.empty:
-                        # 表存在但无该 symbol 的数据
-                        all_tables_have_data = False
-                        break
-                    # 表存在且有数据，继续下一张表
-                except Exception as e:
-                    error_msg = str(e)
-                    # 表不存在是正常情况（首次运行），使用 INFO 级别
-                    if "does not exist" in error_msg.lower():
-                        logger.info(f"Table {self.table_name} not initialized yet, will fetch all tasks")
-                    else:
-                        logger.error(f"表 {table_name} 查询失败: {e}")
-                    all_tables_have_data = False
-                    break
-
-            if not all_tables_have_data:
-                keep_tasks.append(task)
-                logger.info(f"{symbol} 至少一张财务报表为空或表不存在，需要爬取")
+        try:
+            # 查询数据库
+            df = load_dataframe(sql, db=self.market)
+            if df.empty:
+                # 表为空或无匹配记录，无需过滤
+                return
+            # 3. 计算三个月前的时间点
+            # 使用 pd.DateOffset 处理月份跨度，确保逻辑准确
+            three_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=3)
+            # 确保 date 是 datetime 类型
+            df['date'] = pd.to_datetime(df['date'])
+            # 4. 筛选出需要过滤的 symbol
+            # 条件：最新日期 >= 三个月前（即距离今日不超过三个月）
+            recent_symbols = set(
+                df[df['date'] >= three_months_ago]['symbol']
+            )
+            if recent_symbols:
+                # 过滤任务：保留 symbol 不在 recent_symbols 中的任务
+                self.tasks = [t for t in self.tasks if t.get("symbol") not in recent_symbols]
+                logger.info(f"过滤掉最近3个月已更新的 {len(recent_symbols)} 只财报数据，剩余 {len(self.tasks)} 个任务")
+        except Exception as e:
+            error_msg = str(e).lower()
+            # 表不存在是正常情况（首次运行），使用 INFO 级别日志
+            if "does not exist" in error_msg:
+                logger.info(f"Table {self.table_name} 尚未初始化，跳过增量检查")
             else:
-                logger.info(f"{symbol} 三张财务报表均已存在，跳过")
-
-        self.tasks = keep_tasks
-        logger.info(f"check 后剩余 {len(self.tasks)} 个需要爬取的任务")
+                logger.error(f"检查财报数据更新状态失败: {e}")
 
     async def run(self):
         """

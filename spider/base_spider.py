@@ -41,22 +41,21 @@ class BaseSpider(abc.ABC):
         if self.update:
             logger.info("update=True, skipping completeness check")
             return
-
         if not self.tasks:
             return
-
         # 收集所有 symbol
         symbols = [task['symbol'] for task in self.tasks]
         # 转义单引号防止 SQL 注入（虽然符号来自内部，但保持规范）
         escaped_symbols = [s.replace("'", "''") for s in symbols]
         in_clause = "', '".join(escaped_symbols)
-        sql = f"""
+        # 第一段查询：检查哪些 symbol 存在
+        sql_exist = f"""
             SELECT DISTINCT symbol
             FROM {self.table_name}
             WHERE symbol IN ('{in_clause}')
         """
         try:
-            df = load_dataframe(sql, db=self.market)
+            df = load_dataframe(sql_exist, db=self.market)
             existing_symbols = set(df['symbol'].tolist()) if not df.empty else set()
         except Exception as e:
             error_msg = str(e)
@@ -66,16 +65,48 @@ class BaseSpider(abc.ABC):
             else:
                 logger.error(f"Failed to query existing symbols: {e}, will re-fetch all tasks")
             existing_symbols = set()
-
         new_tasks = []
         skip_symbols = []
+        # 第二段查询：批量获取已存在 symbol 的最大日期
+        symbol_max_dates = {}
+        if existing_symbols:
+            # 针对已存在的 symbol 构建 IN 查询，一次性获取所有最大日期
+            exist_escaped = [s.replace("'", "''") for s in existing_symbols]
+            exist_in_clause = "', '".join(exist_escaped)
+            sql_dates = f"""
+                SELECT symbol, MAX(date) as date
+                FROM {self.table_name}
+                WHERE symbol IN ('{exist_in_clause}')
+                GROUP BY symbol
+            """
+            try:
+                df_dates = load_dataframe(sql_dates, db=self.market)
+                if not df_dates.empty:
+                    # 转换为字典映射 {symbol: max_date}
+                    df_dates['date'] = pd.to_datetime(df_dates['date'])
+                    symbol_max_dates = dict(zip(df_dates['symbol'], df_dates['date']))
+            except Exception as e:
+                logger.error(f"Failed to query max dates: {e}")
+        # 遍历任务列表进行筛选
         for task in self.tasks:
             symbol = task['symbol']
-            if symbol in existing_symbols:
-                skip_symbols.append(symbol)
-            else:
+            # 情况1: symbol 不在数据库中，保留任务（全量获取）
+            if symbol not in existing_symbols:
                 new_tasks.append(task)
-
+                continue
+            # 情况2: symbol 在数据库中，检查日期
+            newest_date = symbol_max_dates.get(symbol).date()
+            # 如果能取到最新日期，进行判断
+            if newest_date and not pd.isna(newest_date):
+                if newest_date >= pd.Timestamp.now().date():
+                    skip_symbols.append(symbol)
+                else:
+                    # 未更新到最新，设置起始日期
+                    task['start_date'] = newest_date
+                    new_tasks.append(task)
+            else:
+                # 异常情况：symbol存在但未查到日期，为了保险起见也加入任务列表
+                new_tasks.append(task)
         if skip_symbols:
             logger.info(f"Data for {skip_symbols} already complete, skipping")
         self.tasks = new_tasks

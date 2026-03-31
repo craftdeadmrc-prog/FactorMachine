@@ -1,24 +1,20 @@
+# core/storage.py
 import os
 import duckdb
 import pandas as pd
 import threading
 from .config import DATA_PATH
-
 os.makedirs(DATA_PATH, exist_ok=True)
-
 # 用于保护每个市场数据库文件创建表的锁
 _market_locks = {}
-
 def _get_lock(market: str) -> threading.Lock:
     """获取指定市场的锁（每个市场独立）"""
     if market not in _market_locks:
         _market_locks[market] = threading.Lock()
     return _market_locks[market]
-
 def _get_db_path(market: str) -> str:
     """获取市场对应的DuckDB文件路径"""
     return os.path.join(DATA_PATH, f"{market}.duckdb")
-
 def save_dataframe(df: pd.DataFrame, table_name: str, db: str, primary_key: list = None):
     """
     将DataFrame写入指定市场的指定表。
@@ -26,14 +22,14 @@ def save_dataframe(df: pd.DataFrame, table_name: str, db: str, primary_key: list
     如果提供primary_key，则创建主键约束。
     插入数据时使用INSERT OR IGNORE，以忽略主键冲突。
     多线程安全：使用按市场的锁保护表的创建。
+    更新: 启用 DuckDB 的 wal_autocheckpoint 功能，当 WAL 日志达到一定大小时自动更新数据库文件（更新权重）。
     """
     if df is None or df.empty:
         return
-
     lock = _get_lock(db)
     with lock:  # 确保同一市场内创建表的操作是串行的
         db_path = _get_db_path(db)
-        con = duckdb.connect(db_path)
+        con = duckdb.connect(db_path,config=dict(wal_autocheckpoint="256 MB"))
         try:
             # 构建列定义
             columns_def = []
@@ -50,14 +46,11 @@ def save_dataframe(df: pd.DataFrame, table_name: str, db: str, primary_key: list
                 else:
                     sql_type = 'VARCHAR'
                 columns_def.append(f'"{col_name}" {sql_type}')
-
             if primary_key:
                 pk_cols = ', '.join([f'"{c}"' for c in primary_key])
                 columns_def.append(f'PRIMARY KEY ({pk_cols})')
-
             create_stmt = f'CREATE TABLE IF NOT EXISTS "{table_name}" ({", ".join(columns_def)})'
             con.execute(create_stmt)
-
             # 注册临时表并插入（忽略主键冲突）
             con.register('temp_df', df)
             cols = ', '.join([f'"{c}"' for c in df.columns])
@@ -65,7 +58,6 @@ def save_dataframe(df: pd.DataFrame, table_name: str, db: str, primary_key: list
             con.execute(insert_stmt)
         finally:
             con.close()
-
 def load_dataframe(sql: str, db: str) -> pd.DataFrame:
     """
     执行SQL查询，返回结果DataFrame。
@@ -73,9 +65,12 @@ def load_dataframe(sql: str, db: str) -> pd.DataFrame:
     db_path = _get_db_path(db)
     if not os.path.exists(db_path):
         return pd.DataFrame()
-    con = duckdb.connect(db_path)
+    con = duckdb.connect(db_path, read_only=True) # 使用只读模式避免加锁写操作
     try:
         df = con.execute(sql).df()
         return df
+    except Exception as e:
+        # 如果表不存在会报错，返回空 DF
+        return pd.DataFrame()
     finally:
         con.close()

@@ -7,41 +7,27 @@ import zipfile
 import logging
 import os
 import requests
-import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
 from typing import Optional, List, Dict
-
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe, load_dataframe
 from core.config import DATA_PATH, MAX_CONCURRENCY
 from core.proxy import proxy_pool
 from core.scheduler import task
-
 logger = logging.getLogger(__name__)
-
-# S3 API 命名空间
-NS = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
-BASE_S3_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
-START_DATE_DEFAULT = datetime(2017, 8, 17)   # 数据最早起始日
-
-
 @task(description="获取币安现货1分钟K线数据（日粒度ZIP包）")
 class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
     resource = "spot_binance"
     table_name = "kline_1m"
     temp_dir = os.path.join(DATA_PATH, "crypto_binance_temp")
     os.makedirs(temp_dir, exist_ok=True)
-
     # 原始 CSV 列名（共 12 列）
     column_names = [
         'open_time', 'open', 'high', 'low', 'close', 'volume',
         'close_time', 'amount', 'trade_num',
         'taker_buy_volume', 'taker_buy_amount', 'ignore'
     ]
-
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)
-
     def _rename_columns(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """添加标识字段、处理时间、删除无用列"""
         df['open_time'] = (df['open_time'] // 1000).astype('int64')
@@ -55,13 +41,11 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         df.sort_values(['symbol', 'date'], inplace=True)
         df.reset_index(drop=True, inplace=True)
         return df
-
     # ---------- 代理池包装的网络请求 ----------
     def _head_request_sync(self, url: str) -> int:
         """同步 HEAD 请求，返回状态码"""
         resp = requests.head(url, timeout=10)
         return resp.status_code
-
     def _download_zip_sync(self, url: str, local_path: str) -> bool:
         """同步下载 ZIP 文件，返回是否成功"""
         try:
@@ -72,72 +56,21 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
                             f.write(chunk)
                     return True
                 else:
-                    logger.warning(f"下载失败 {r.status_code}: {url}")
+                    pass
         except Exception as e:
             logger.error(f"下载出错 {url}: {e}")
         return False
-
-    def _get_s3_xml_sync(self, prefix: str, marker: Optional[str] = None) -> str:
-        """同步获取 S3 目录 XML 内容"""
-        params = {"delimiter": "/", "prefix": prefix}
-        if marker:
-            params["marker"] = marker
-        resp = requests.get(BASE_S3_URL, params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.text
-
-    def _get_zip_keys_for_symbol_sync(self, symbol: str) -> List[str]:
-        """同步获取指定 symbol 的所有 ZIP 文件 Key"""
-        prefix = f"data/spot/daily/klines/{symbol}/1m/"
-        all_keys = []
-        marker = None
-        while True:
-            xml_text = proxy_pool(self._get_s3_xml_sync, prefix, marker)
-            root = ET.fromstring(xml_text)
-            # 提取本页所有 Contents 的 Key
-            checksum_key = None
-            for content in root.findall('s3:Contents', NS):
-                key_elem = content.find('s3:Key', NS)
-                if key_elem is not None:
-                    key = key_elem.text
-                    if key.endswith('.zip'):
-                        all_keys.append(key)
-                    elif key.endswith('.CHECKSUM'):
-                        checksum_key = key
-            # 分页处理：使用最后一个 .CHECKSUM 作为下一页 marker
-            is_truncated = root.find('s3:IsTruncated', NS)
-            if is_truncated is not None and is_truncated.text == 'true':
-                if checksum_key:
-                    marker = checksum_key
-                    logger.info(f"继续获取 {symbol} 列表，marker={marker}")
-                    continue
-                else:
-                    logger.warning(f"{symbol} 列表截断但无 .CHECKSUM，停止分页")
-                    break
-            else:
-                break
-        return all_keys
-
-    # ---------- 数据库最新日期查询 ----------
-    def _get_latest_date(self, symbol: str) -> Optional[datetime]:
-        """查询数据库中该 symbol 的最新日期"""
-        sql = f"SELECT MAX(date) FROM symbols WHERE symbol = '{symbol}'"
-        try:
-            df = load_dataframe(sql, db=self.market)
-            return df["date"][0]
-        except Exception as e:
-            logger.error(f"查询 {symbol} 最新日期失败: {e}")
-        return None
-
     # ---------- 异步验证函数（封装） ----------
-    async def _check_symbol_async(self, symbol: str, yesterday: datetime) -> Optional[Dict]:
+    async def _check_symbol_async(self, task: Dict) -> Optional[Dict]:
         """
         异步检查单个 symbol：
          - 检查昨日文件是否存在（退市检测）
          - 查询数据库最新日期
          - 如果需要处理，返回任务字典；否则返回 None
         """
-        # 1. 检查昨日文件是否存在
+        symbol = task['symbol']
+        yesterday = task['end_date']
+        # 1. 检查结束日文件是否存在
         date_str = yesterday.strftime("%Y-%m-%d")
         url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/1m/{symbol}-1m-{date_str}.zip"
         try:
@@ -148,125 +81,111 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         except Exception as e:
             logger.error(f"检查 {symbol} 昨日文件失败: {e}")
             return None
-
-        # 2. 查询数据库最新日期
-        latest = await asyncio.to_thread(self._get_latest_date, symbol)
-        if latest is None or latest < yesterday:
-            if latest is None:
-                start = START_DATE_DEFAULT
-            else:
-                start = latest
-            logger.info(f"{symbol} 保留任务，起始日期 {start.strftime('%Y-%m-%d')} 至 {yesterday.strftime('%Y-%m-%d')}")
-            return {
-                'symbol': symbol,
-                'market': self.market,
-                'start_date': start,
-                'end_date': yesterday
-            }
-        else:
-            logger.info(f"{symbol} 数据已完整到昨日，移除任务")
-            return None
-
+        return task
     # ---------- 数据检查与任务调整（异步版） ----------
     async def check(self):
         """异步检查任务，根据昨日文件和数据库最新日期调整任务列表"""
         if not self.tasks:
             logger.info("无任务，跳过 check")
             return
-        yesterday = datetime.now() - timedelta(days=1)
-        # 并发检查所有任务
-        check_tasks = [self._check_symbol_async(task['symbol'], yesterday) for task in self.tasks]
+        check_tasks = [self._check_symbol_async(task) for task in self.tasks]
         results = await asyncio.gather(*check_tasks)
-
-        # 收集需要保留的任务
         new_tasks = [res for res in results if res is not None]
         self.tasks = new_tasks
         logger.info(f"check 后剩余 {len(self.tasks)} 个任务")
-        
-
-    async def process_symbol(self, symbol: str, start_date: datetime, end_date: datetime,
+    async def process_symbol(self, symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp,
                         session: aiohttp.ClientSession):
-        # 1. 获取该 symbol 所有存在的 ZIP 文件 Key
+        # 1. 生成全量日期范围
+        all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
+        # 2. 读取数据库已存在的日期进行过滤
+        # 使用 SQL 读取，注意数据库中存储的是时间戳或日期对象，这里转为 date 对象方便比较
         try:
-            keys = await asyncio.to_thread(self._get_zip_keys_for_symbol_sync, symbol)
+            # 假设 date 字段是 TIMESTAMP 或 BIGINT，这里使用 date() 函数转成日期字符串或直接比较
+            # 为兼容性，读取后由 pandas 处理
+            exist_df = load_dataframe(
+                sql=f'SELECT DISTINCT "date" FROM "{self.table_name}" WHERE "symbol" = \'{symbol}\'',
+                db=self.market
+            )
+            if not exist_df.empty:
+                # 转换为 datetime.date 对象集合
+                existing_dates = set(pd.to_datetime(exist_df['date']).dt.date)
+                # 过滤掉已存在的日期
+                dates_to_process = [d for d in all_dates if d.date() not in existing_dates]
+                logger.info(f"{symbol} 数据库已存在 {len(existing_dates)} 天数据，需下载 {len(dates_to_process)} 天")
+            else:
+                dates_to_process = list(all_dates)
         except Exception as e:
-            logger.error(f"获取 {symbol} 文件列表失败: {e}")
+            # 如果表不存在或其他错误，加载全部日期
+            logger.warning(f"{symbol} 读取已有日期失败 (可能表不存在): {e}，将处理全量日期")
+            dates_to_process = list(all_dates)
+        if not dates_to_process:
+            logger.info(f"{symbol} 所有日期均已存在，跳过")
             return
-
-        # 提取已存在的日期集合（date 对象）
-        existing_dates = []
-        for key in keys:
-            parts = key.split('/')[-1].split('-')
-            if len(parts) >= 3:
-                try:
-                    date_str = parts[-3] + '-' + parts[-2] + '-' + parts[-1].replace('.zip', '')
-                    date_obj = pd.to_datetime(date_str)
-                    existing_dates.append(date_obj)
-                except:
-                    pass
-        # 2. 高效筛选需要处理的日期（仅遍历已存在日期，而非遍历时间区间）
-        dates_to_process = [d for d in existing_dates if start_date <= d <= end_date]
-        
-        # 3. 并发控制（使用全局配置的并发数）, 经实际测试判断消耗并不大且无严苛反爬，因此选择更高并发而不继承信号量
+        # 3. 按月份分组日期，为了聚合写入
+        # 使用 dict 存储: { (year, month): [date_list] }
+        monthly_groups: Dict[tuple, List[pd.Timestamp]] = {}
+        for dt in dates_to_process:
+            key = (dt.year, dt.month)
+            if key not in monthly_groups:
+                monthly_groups[key] = []
+            monthly_groups[key].append(dt)
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-
-        async def process_one_date(date_obj: datetime):
+        async def process_one_date(date_obj: pd.Timestamp) -> Optional[pd.DataFrame]:
+            """下载并解析单日数据，返回 DataFrame"""
             async with semaphore:
                 date_str = date_obj.strftime("%Y-%m-%d")
                 filename = f"{symbol}-1m-{date_str}.zip"
                 url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/1m/{filename}"
                 local_path = os.path.join(self.temp_dir, filename)
-
                 try:
-                    # 下载 ZIP（通过代理池在线程池中执行）
                     success = await asyncio.to_thread(proxy_pool, self._download_zip_sync, url, local_path)
                     if not success:
-                        logger.warning(f"{symbol} {date_str} 下载失败，跳过")
-                        return
+                        return None
                 except Exception as e:
                     logger.error(f"{symbol} {date_str} 下载异常: {e}")
-                    return
-
-                # 处理 ZIP
+                    return None
+                df = None
                 try:
                     with zipfile.ZipFile(local_path, 'r') as zf:
                         csv_files = [f for f in zf.namelist() if f.endswith('.csv')]
                         if csv_files:
                             with zf.open(csv_files[0]) as f:
                                 df = pd.read_csv(f, header=None, names=self.column_names)
-                    if df is not None and not df.empty:
-                        df = self._rename_columns(df, symbol)
-                        save_dataframe(
-                            df,
-                            table_name=self.table_name,
-                            db=self.market,
-                            primary_key=["symbol", "date"]
-                        )
-                        logger.info(f"{symbol} {date_str} 数据已保存，共 {len(df)} 条")
                 except Exception as e:
                     logger.error(f"{symbol} {date_str} 处理 ZIP 失败: {e}")
                 finally:
                     if os.path.exists(local_path):
                         os.remove(local_path)
-
-        # 4. 并发执行所有日期的处理
-        tasks = [process_one_date(date) for date in dates_to_process]
-        await asyncio.gather(*tasks)
-
-        logger.info(f"{symbol} 处理完成，共处理 {len(dates_to_process)} 个日期")
-
+                if df is not None and not df.empty:
+                    return self._rename_columns(df, symbol)
+                return None
+        # 4. 遍历每个月份组，组内并发下载，聚合后写入
+        for (year, month), group_dates in monthly_groups.items():
+            # 组内并发执行
+            tasks = [process_one_date(d) for d in group_dates]
+            results = await asyncio.gather(*tasks)
+            # 过滤空结果并聚合
+            monthly_dfs = [df for df in results if df is not None]
+            if monthly_dfs:
+                final_df = pd.concat(monthly_dfs, ignore_index=True)
+                # 统一写入一个月的数据
+                save_dataframe(
+                    final_df,
+                    table_name=self.table_name,
+                    db=self.market,
+                    primary_key=["symbol", "date"]
+                )
+                logger.info(f"{symbol} {year}-{month:02d} 数据已保存，共 {len(final_df)} 条")
+        logger.info(f"{symbol} 处理完成")
     # ---------- 主运行方法 ----------
     async def run(self):
         if not self.tasks:
             logger.info("无任务，退出")
             return
-
         total = len(self.tasks)
         logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
-
         conn = aiohttp.TCPConnector(limit=10)
         semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-
         async with aiohttp.ClientSession(connector=conn) as session:
             processed = 0
             async def process_with_semaphore(task):
@@ -283,9 +202,8 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
                     logger.error(f"处理 {symbol} 失败: {e}")
                 finally:
                     processed += 1
-                    logger.info(f"{self.__class__.__name__} [{processed}/{total}] 完成 {symbol}")
-
+                    if processed%10==0:
+                        logger.info(f"{self.__class__.__name__} [{processed}/{total}] 完成 {symbol}")
             tasks = [process_with_semaphore(task) for task in self.tasks]
             await asyncio.gather(*tasks)
-
         logger.info(f"{self.__class__.__name__}: 数据抓取完成，已处理 {total} 个任务")

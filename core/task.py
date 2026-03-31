@@ -20,7 +20,7 @@ class LogCollector:
 
             def emit(self, record):
                 msg = self.format(record)
-                self.log_list.append((record.levelno, msg, datetime.now()))
+                self.log_list.append((record.levelno, msg, pd.Timestamp.now()))
         handler = ListHandler(self.logs)
         handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         return handler

@@ -54,13 +54,14 @@ class StockValueEmSpider(BaseSpider):
         logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
         for idx, task in enumerate(self.tasks, 1):
-            logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
+            if idx%10==0:
+                logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
 
             market = task['market']
             symbol = task['symbol']
 
             # 添加随机延时，避免请求过快
-            await asyncio.sleep(random.randint(0, 1))
+            # await asyncio.sleep(random.randint(0, 1))
 
             try:
                 # 使用代理池包装 akshare 接口

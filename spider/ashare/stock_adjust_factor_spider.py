@@ -4,7 +4,7 @@ import pandas as pd
 import akshare as ak
 
 from ..base_spider import BaseSpider
-from core.storage import save_dataframe
+from core.storage import save_dataframe, load_dataframe
 from core.proxy import proxy_pool
 from core.scheduler import task
 
@@ -28,8 +28,46 @@ class StockAdjustFactorSpider(BaseSpider):
         df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
         return df
     def check(self):
+        # 先执行父类检查（可能会处理 update 标志等基础逻辑）
         super().check()
-
+        # 1. 收集所有待处理的 symbol
+        symbols = list(set([t.get("symbol") for t in self.tasks if t.get("symbol")]))
+        # 2. 构建 SQL 批量查询，获取每个 symbol 的最新日期
+        # 使用 IN 子句批量检索
+        in_clause = "', '".join(symbols)
+        sql = f"""
+            SELECT symbol, MAX(date) as latest_date
+            FROM {self.table_name}
+            WHERE symbol IN ({in_clause})
+            GROUP BY symbol
+        """
+        try:
+            # 查询数据库
+            df = load_dataframe(sql, db=self.market)
+            if df.empty:
+                # 表为空或无匹配记录，无需过滤
+                return
+            # 3. 计算一个月前的时间点
+            # 使用 pd.DateOffset 处理月份跨度，确保逻辑准确
+            six_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=6)
+            # 确保 latest_date 是 datetime 类型
+            df['latest_date'] = pd.to_datetime(df['latest_date'])
+            # 4. 筛选出需要过滤的 symbol
+            # 条件：最新日期 >= 六个月前（即距离今日不超过六个月）
+            recent_symbols = set(
+                df[df['latest_date'] >= six_months_ago]['symbol']
+            )
+            if recent_symbols:
+                # 过滤任务：保留 symbol 不在 recent_symbols 中的任务
+                self.tasks = [t for t in self.tasks if t.get("symbol") not in recent_symbols]
+                logger.info(f"过滤掉最近6个月已更新的 {len(recent_symbols)} 只复权因子，剩余 {len(self.tasks)} 个任务")
+        except Exception as e:
+            error_msg = str(e).lower()
+            # 表不存在是正常情况（首次运行），使用 INFO 级别日志
+            if "does not exist" in error_msg:
+                logger.info(f"Table {self.table_name} 尚未初始化，跳过增量检查")
+            else:
+                logger.error(f"检查复权数据更新状态失败: {e}")
     async def run(self):
         if not self.tasks:
             logger.info("No tasks to run.")
@@ -39,7 +77,8 @@ class StockAdjustFactorSpider(BaseSpider):
         logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
         for idx, task in enumerate(self.tasks, 1):
-            logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
+            if idx%10==0:
+                logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
 
             market = task['market']
             symbol = task['symbol']

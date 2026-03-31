@@ -27,6 +27,7 @@ class StockDailySpider(BaseSpider):
         df = df.rename(columns=rename_map)
         df["symbol"] = symbol
         df["market"] = market
+        df["turnover_ratio"] = df["turnover_ratio"]*100
         df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
         return df
     def check(self):
@@ -41,15 +42,13 @@ class StockDailySpider(BaseSpider):
         logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
         for idx, task in enumerate(self.tasks, 1):
-            logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
+            if idx%10==0:
+                logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
 
             market = task['market']
             symbol = task['symbol']
             start_date = task['start_date']
             end_date = task['end_date']
-
-            start_str = start_date.strftime("%Y%m%d") if isinstance(start_date, (date, datetime)) else start_date
-            end_str = end_date.strftime("%Y%m%d") if isinstance(end_date, (date, datetime)) else end_date
             code = f"{market}{symbol}"
 
             try:
@@ -57,8 +56,8 @@ class StockDailySpider(BaseSpider):
                     proxy_pool,
                     ak.stock_zh_a_daily,
                     symbol=code,
-                    start_date=start_str,
-                    end_date=end_str,
+                    start_date=start_date.strftime("%Y%m%d"),
+                    end_date=end_date.strftime("%Y%m%d"),
                     adjust=""
                 )
             except Exception as e:

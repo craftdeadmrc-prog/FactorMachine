@@ -86,15 +86,54 @@ class FundPortfolioHoldEmSpider(BaseSpider):
         for col in ["holding_ratio", "holding_number", "holding_value"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-
+        df["holding_value"] = df["holding_value"]*10000
+        df["holding_number"] = df["holding_number"]*10000
         # 按 symbol、date 排序
         df = df.sort_values(["symbol", "date"], na_position="last").reset_index(drop=True)
         return df
 
     # ---------- check ----------
     def check(self):
+        # 先执行父类检查（可能会处理 update 标志等基础逻辑）
         super().check()
-
+        # 1. 收集所有待处理的 symbol
+        symbols = [task['symbol'] for task in self.tasks]
+        # 2. 构建 SQL 批量查询，获取每个 symbol 的最新日期
+        # 使用 IN 子句批量检索
+        in_clause = "', '".join(symbols)
+        sql = f"""
+            SELECT symbol, MAX(date) as date
+            FROM {self.table_name}
+            WHERE symbol IN ('{in_clause}')
+            GROUP BY symbol
+        """
+        try:
+            # 查询数据库
+            df = load_dataframe(sql, db=self.market)
+            if df.empty:
+                # 表为空或无匹配记录，无需过滤
+                return
+            # 3. 计算三个月前的时间点
+            # 使用 pd.DateOffset 处理月份跨度，确保逻辑准确
+            three_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=3)
+            # 确保 date 是 datetime 类型
+            df['date'] = pd.to_datetime(df['date'])
+            # 4. 筛选出需要过滤的 symbol
+            # 条件：最新日期 >= 三个月前（即距离今日不超过三个月）
+            recent_symbols = set(
+                df[df['date'] >= three_months_ago]['symbol']
+            )
+            if recent_symbols:
+                # 过滤任务：保留 symbol 不在 recent_symbols 中的任务
+                self.tasks = [t for t in self.tasks if t.get("symbol") not in recent_symbols]
+                logger.info(f"过滤掉最近3个月已更新的 {len(recent_symbols)} 只基金，剩余 {len(self.tasks)} 个任务")
+        except Exception as e:
+            error_msg = str(e).lower()
+            # 表不存在是正常情况（首次运行），使用 INFO 级别日志
+            if "does not exist" in error_msg:
+                logger.info(f"Table {self.table_name} 尚未初始化，跳过增量检查")
+            else:
+                logger.error(f"检查基金持仓数据更新状态失败: {e}")
     # ---------- run ----------
     async def run(self):
         """
@@ -111,7 +150,8 @@ class FundPortfolioHoldEmSpider(BaseSpider):
         semaphore = asyncio.Semaphore(3)
 
         for idx, task in enumerate(self.tasks, 1):
-            logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
+            if idx%10==0:
+                logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
 
             symbol = task.get("symbol")
             market = task.get("market")
@@ -121,10 +161,8 @@ class FundPortfolioHoldEmSpider(BaseSpider):
             if not symbol:
                 logger.warning(f"任务缺少 symbol，跳过: {task}")
                 continue
-
             start_year = start_date.year
-            end_year = end_date.year if end_date else datetime.now().year
-
+            end_year = end_date.year if end_date else pd.Timestamp.now().year
             # 准备所有年份的抓取协程
             async def fetch_year(year: int):
                 async with semaphore:
@@ -163,7 +201,7 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                         return None
 
             # 并发执行所有年份
-            years = list(range(start_year, end_year + 1))
+            years = list(range(int(start_year), int(end_year) + 1))
             await asyncio.gather(*[fetch_year(year) for year in years])
 
         logger.info(f"{self.__class__.__name__}: 数据抓取完成，共处理 {total} 个任务")

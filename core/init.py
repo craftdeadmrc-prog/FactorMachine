@@ -107,6 +107,7 @@ async def _fetch_fund_symbols_async():
                     df.drop(columns=["prevclose"], inplace=True)
                 df["symbol"] = symbol
                 df["market"] = market  # 统一市场标识为 fund
+                df["volume"] = df["volume"]*100
                 # 写入日线表
                 save_dataframe(df, table_name="kline_1d", db="fund", primary_key=["symbol", "date"])
                 # 返回最早日期作为上市日期
@@ -117,7 +118,7 @@ async def _fetch_fund_symbols_async():
 
         listing_date = await asyncio.to_thread(fetch_and_save_daily)
         if listing_date is not None:
-            item['date'] = listing_date
+            item['date'] = pd.to_datetime(listing_date)
 
         # 立即写入 symbols 表
         try:
@@ -143,7 +144,6 @@ async def _fetch_crypto_symbols_async():
     """
     import requests
     import xml.etree.ElementTree as ET
-    from datetime import datetime, timedelta
 
     NS = {'s3': 'http://s3.amazonaws.com/doc/2006-03-01/'}
     BASE_S3_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
@@ -171,7 +171,8 @@ async def _fetch_crypto_symbols_async():
                     prefix_text = prefix_elem.text
                     symbol = prefix_text.split('/')[-2]
                     if symbol.endswith('USDT') and any(c.isalpha() for c in symbol[:-4]):
-                        symbols.append(symbol)
+                        if len(symbol.split("USDT")[0])<=4:
+                            symbols.append(symbol)
             is_truncated = root.find('.//ns:IsTruncated', namespaces)
             next_marker_elem = root.find('.//ns:NextMarker', namespaces)
             if is_truncated is not None and is_truncated.text == 'true' and next_marker_elem is not None:
@@ -182,7 +183,7 @@ async def _fetch_crypto_symbols_async():
 
     # 获取原始 symbol 列表
     try:
-        raw_symbols = await asyncio.to_thread(get_raw_symbols_sync)
+        raw_symbols = await asyncio.to_thread(proxy_pool,get_raw_symbols_sync)
     except Exception as e:
         logger.error(f"Failed to fetch crypto symbols: {e}")
         return
@@ -194,7 +195,7 @@ async def _fetch_crypto_symbols_async():
     # 并发处理每个 symbol
     async def process_one_crypto(symbol):
         # 1. 退市检测
-        check_date = datetime.now() - timedelta(days=2)
+        check_date = pd.Timestamp.now().date() - pd.DateOffset(days=2)
         date_str = check_date.strftime("%Y-%m-%d")
         url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/1m/{symbol}-1m-{date_str}.zip"
 
@@ -244,8 +245,8 @@ async def _fetch_crypto_symbols_async():
             return None
 
         # 3. 过滤上市不足一年的品种
-        if (datetime.now() - date).days < 365*3:
-            logger.info(f"{symbol} 上市不足三年，跳过")
+        if (pd.Timestamp.now().date() - date).days < 365*2:
+            logger.info(f"{symbol} 上市不足两年，跳过")
             return None
 
         item = {
