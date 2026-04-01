@@ -88,6 +88,7 @@ class BaseSpider(abc.ABC):
             except Exception as e:
                 logger.error(f"Failed to query max dates: {e}")
         # 遍历任务列表进行筛选
+        now = pd.Timestamp.now().date() if pd.Timestamp.now().hour>16 else pd.Timestamp.now().date()-pd.Timedelta(days=1)
         for task in self.tasks:
             symbol = task['symbol']
             # 情况1: symbol 不在数据库中，保留任务（全量获取）
@@ -98,7 +99,7 @@ class BaseSpider(abc.ABC):
             newest_date = symbol_max_dates.get(symbol).date()
             # 如果能取到最新日期，进行判断
             if newest_date and not pd.isna(newest_date):
-                if newest_date >= pd.Timestamp.now().date():
+                if newest_date >= now:
                     skip_symbols.append(symbol)
                 else:
                     # 未更新到最新，设置起始日期
