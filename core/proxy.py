@@ -118,7 +118,6 @@ def proxy_pool(func, *args, **kwargs):
             result = func(*args, **kwargs)
             # 成功后更新索引，下次从下一个代理开始
             _thread_local.index = (idx + 1) % len(proxies)
-            logger.info(f"函数 {func_name} 使用代理 {proxy} 调用成功")
             return result
         except RequestException as e:
             logger.warning(f"代理 {proxy} 请求失败: {e}")
@@ -128,5 +127,6 @@ def proxy_pool(func, *args, **kwargs):
             raise
         finally:
             set_use_proxy(False)
+            logger.info(f"函数 {func_name} 使用代理 {proxy} 调用成功")
 
     raise Exception("所有代理均无法连接，请检查代理列表或网络")

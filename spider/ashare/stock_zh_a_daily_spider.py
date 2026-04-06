@@ -74,7 +74,8 @@ class StockDailySpider(BaseSpider):
                     db=self.market,
                     primary_key=["symbol", "date"]
                 )
-                logger.info(f"股票 {code} 日线数据已保存，共 {len(df)} 条")
+                if idx % 10 == 0:
+                    logger.info(f"股票 {code} 日线数据已保存，共 {len(df)} 条")
             except Exception as e:
                 logger.error(f"插入股票 {code} 日线数据失败: {e}")
 

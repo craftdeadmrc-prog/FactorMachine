@@ -1,17 +1,12 @@
-# core/scheduler.py（修改后）
-
 import os
 import importlib
 import inspect
 import asyncio
 import logging
 from typing import List, Dict, Optional, Callable
-
 from .task import Task
 from .config import MAX_CONCURRENCY
-
 logger = logging.getLogger(__name__)
-
 def task(description: str = ""):
     def decorator(cls):
         cls._is_task = True
@@ -19,24 +14,21 @@ def task(description: str = ""):
             cls.description = description
         return cls
     return decorator
-
-
 class ResourceLockManager:
     _locks: Dict[str, asyncio.Lock] = {}
-
     @classmethod
     def get_lock(cls, resource_id: str) -> asyncio.Lock:
         if resource_id not in cls._locks:
             cls._locks[resource_id] = asyncio.Lock()
         return cls._locks[resource_id]
-
-
 class Scheduler:
     def __init__(self, max_concurrency: int = None, scan_paths: List[str] = None):
         self.max_concurrency = max_concurrency or MAX_CONCURRENCY
         self.scan_paths = scan_paths or ["spider"]
         self.tasks: Dict[str, Task] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
+        # 优化1: 信号量提升为实例属性，确保全局生效
+        self._sem = asyncio.Semaphore(self.max_concurrency)
         self.load_tasks()
 
     def load_tasks(self):
@@ -94,40 +86,44 @@ class Scheduler:
         tasks = [self.get_task(name) for name in task_names if self.get_task(name) is not None]
         if not tasks:
             return {}
-
-        sem = asyncio.Semaphore(self.max_concurrency)
-
         async def run_one(task: Task):
-            async with sem:
-                task_class = task.metadata.get("class")
-                resource = getattr(task_class, "resource", None) if task_class else None
-                lock = ResourceLockManager.get_lock(resource) if resource else None
-
-                async def execute():
-                    logger.info(f"任务 {task.name} 开始执行")
-                    try:
-                        result = await task.execute(**kwargs)
-                        status = result.get("status", "unknown")
-                        logger.info(f"任务 {task.name} 执行结束，状态: {status}")
-                        return result
-                    except asyncio.CancelledError:
-                        logger.warning(f"任务 {task.name} 被取消")
-                        raise
-
-                if lock:
-                    async with lock:
-                        return await execute()
-                else:
+            # 获取资源锁（如果需要）
+            task_class = task.metadata.get("class")
+            resource = getattr(task_class, "resource", None) if task_class else None
+            lock = ResourceLockManager.get_lock(resource) if resource else None
+ 
+            # 优化2: 调整锁顺序 - 先等资源，再占信号量
+            # 这避免了占用并发名额去等待资源锁，从而允许其他不同资源的任务并行
+            if lock:
+                await lock.acquire()
+            
+            try:
+                # 等待全局并发槽位
+                async with self._sem:
+                    async def execute():
+                        logger.info(f"任务 {task.name} 开始执行")
+                        try:
+                            result = await task.execute(**kwargs)
+                            status = result.get("status", "unknown")
+                            logger.info(f"任务 {task.name} 执行结束，状态: {status}")
+                            return result
+                        except asyncio.CancelledError:
+                            logger.warning(f"任务 {task.name} 被取消")
+                            raise
+ 
                     return await execute()
-
+            finally:
+                # 确保释放资源锁
+                if lock:
+                    lock.release()
+        # 创建所有任务
         for task in tasks:
             self._running_tasks[task.name] = asyncio.create_task(run_one(task))
-
+        # 等待结果
         results = await asyncio.gather(
             *[self._running_tasks[task.name] for task in tasks],
             return_exceptions=True
         )
-
         result_dict = {}
         for task, res in zip(tasks, results):
             self._running_tasks.pop(task.name, None)
@@ -139,10 +135,8 @@ class Scheduler:
             else:
                 result_dict[task.name] = res
         return result_dict
-
     async def run_task(self, task_name: str, **kwargs) -> Dict:
         return await self.run_tasks([task_name], **kwargs)
-
     def terminate_task(self, task_name: str) -> bool:
         if task_name in self._running_tasks:
             self._running_tasks[task_name].cancel()

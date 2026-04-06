@@ -1,0 +1,60 @@
+<div id="view-kline" class="h-full">
+    <!-- 顶部控制栏 -->
+    <div class="kline-controls" style="margin-bottom: 16px; background: var(--card-bg); padding: 16px; border-radius: 4px;">
+        <div style="display: flex; gap: 16px; align-items: flex-end;">
+            <!-- 市场选择 -->
+            <div class="form-group" style="flex:1; margin:0;">
+                <label>市场</label>
+                <select id="kline-market" onchange="onMarketChange()">
+                    <option value="">选择市场</option>
+                </select>
+            </div>
+            <!-- 周期选择 -->
+            <div class="form-group" style="flex:1; margin:0;">
+                <label>周期</label>
+                <select id="kline-interval" disabled onchange="onIntervalChange()">
+                    <option value="">请先选择市场</option>
+                </select>
+            </div>
+            <!-- 手动输入 -->
+            <div class="form-group" style="flex:1; margin:0;">
+                <label>代码 (手动输入)</label>
+                <input type="text" id="kline-symbol-manual" list="symbol-list" placeholder="输入代码查看" disabled autocomplete="off">
+                <datalist id="symbol-list"></datalist>
+            </div>
+            <!-- 时间范围 -->
+            <div class="form-group" style="flex:1; margin:0;">
+                <label>时间范围</label>
+                <select id="kline-range" onchange="loadKline()">
+                    <option value="1w">最近一周</option>
+                    <option value="1m">最近一个月</option>
+                    <option value="1y" selected>最近一年</option>
+                    <option value="all">全部</option>
+                </select>
+            </div>
+            <button class="btn-primary" style="height: 36px;" onclick="loadKlineFromInput()" id="btn-load-kline" disabled>查看</button>
+        </div>
+    </div>
+
+    <!-- 主体内容：左侧列表 + 右侧图表 -->
+    <div class="kline-layout" style="height: calc(100% - 100px);">
+        <!-- 左侧：Symbol 列表 -->
+        <div class="symbol-list-panel">
+            <div class="symbol-list-controls">
+                <div style="font-weight: bold; margin-bottom: 8px;">市场概览</div>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-xs active" onclick="sortSymbols('symbol', this)">代码</button>
+                    <button class="btn-xs" onclick="sortSymbols('pct_change', this)">涨跌幅</button>
+                </div>
+            </div>
+            <div class="symbol-grid" id="symbol-grid-container">
+                <!-- Symbol cards injected here -->
+            </div>
+        </div>
+
+        <!-- 右侧：K线图 -->
+        <div class="kline-container" style="padding:0; background: var(--card-bg); border-radius: 4px;">
+            <div class="kline-chart-box" id="kline-chart-area" style="height: 100%;"></div>
+        </div>
+    </div>
+</div>

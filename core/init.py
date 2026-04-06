@@ -206,7 +206,7 @@ async def _fetch_crypto_symbols_async():
             except Exception:
                 return 500
 
-        status = await asyncio.to_thread(head_check)
+        status = await asyncio.to_thread(proxy_pool,head_check)
         if status != 200:
             logger.info(f"{symbol} 前日文件不存在，视为退市，跳过")
             return None
@@ -231,7 +231,7 @@ async def _fetch_crypto_symbols_async():
                 logger.warning(f"获取 {symbol} 首个 zip key 失败: {e}")
             return None
 
-        first_key = await asyncio.to_thread(get_first_zip_key)
+        first_key = await asyncio.to_thread(proxy_pool,get_first_zip_key)
         if not first_key:
             logger.warning(f"{symbol} 无任何 zip 文件，跳过")
             return None
@@ -248,13 +248,16 @@ async def _fetch_crypto_symbols_async():
         if (pd.Timestamp.now().date() - date).days < 365*2:
             logger.info(f"{symbol} 上市不足两年，跳过")
             return None
+        print(symbol)
+        print(type(symbol))
+        print(symbol[:-4])
 
         item = {
             'market': 'binance',
             'symbol': symbol,
+            'short_name': symbol[:-4],
             'date': date
         }
-
         # 立即写入 symbols 表
         try:
             await asyncio.to_thread(

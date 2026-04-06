@@ -13,6 +13,7 @@ from core.storage import save_dataframe, load_dataframe
 from core.config import DATA_PATH, MAX_CONCURRENCY
 from core.proxy import proxy_pool
 from core.scheduler import task
+from concurrent.futures import ThreadPoolExecutor  # 新增导入
 logger = logging.getLogger(__name__)
 @task(description="获取币安现货1分钟K线数据（日粒度ZIP包）")
 class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
@@ -60,39 +61,52 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         except Exception as e:
             logger.error(f"下载出错 {url}: {e}")
         return False
-    # ---------- 异步验证函数（封装） ----------
-    async def _check_symbol_async(self, task: Dict) -> Optional[Dict]:
+    # ---------- 辅助检查方法 (同步版本) ----------
+    def _check_one_task(self, task: Dict) -> Optional[Dict]:
         """
-        异步检查单个 symbol：
-         - 检查昨日文件是否存在（退市检测）
-         - 查询数据库最新日期
-         - 如果需要处理，返回任务字典；否则返回 None
+        同步检查单个任务：
+        1. 检查昨日文件是否存在（退市检测）
+        2. 存在则返回 task，否则返回 None
         """
         symbol = task['symbol']
         yesterday = task['end_date']
-        # 1. 检查结束日文件是否存在
         date_str = yesterday.strftime("%Y-%m-%d")
         url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/1m/{symbol}-1m-{date_str}.zip"
+        
         try:
-            status = await asyncio.to_thread(proxy_pool, self._head_request_sync, url)
+            # 使用 proxy_pool 包装同步请求
+            status = proxy_pool(self._head_request_sync, url)
             if status != 200:
-                logger.info(f"{symbol} 昨日文件不存在，视为退市，移除任务")
                 return None
         except Exception as e:
             logger.error(f"检查 {symbol} 昨日文件失败: {e}")
             return None
+        
         return task
-    # ---------- 数据检查与任务调整（异步版） ----------
-    async def check(self):
-        """异步检查任务，根据昨日文件和数据库最新日期调整任务列表"""
+    # ---------- 数据检查与任务调整（同步并发版） ----------
+    def check(self):
+        """
+        同步检查任务，利用线程池实现并发检查，避免串行等待
+        """
         if not self.tasks:
             logger.info("无任务，跳过 check")
             return
-        check_tasks = [self._check_symbol_async(task) for task in self.tasks]
-        results = await asyncio.gather(*check_tasks)
-        new_tasks = [res for res in results if res is not None]
-        self.tasks = new_tasks
-        logger.info(f"check 后剩余 {len(self.tasks)} 个任务")
+ 
+        logger.info(f"开始并发检查 {len(self.tasks)} 个任务的有效性...")
+        
+        # 使用线程池并发执行，max_workers 控制并发数
+        # MAX_CONCURRENCY 可以作为全局并发限制的参考
+        valid_tasks = []
+        with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as executor:
+            # executor.map 会保持输入顺序，但为了效率我们只需要结果
+            # 提交所有任务
+            results = executor.map(self._check_one_task, self.tasks)
+            
+            # 过滤掉结果为 None 的项
+            valid_tasks = [res for res in results if res is not None]
+ 
+        self.tasks = valid_tasks
+        logger.info(f"check 后剩余 {len(self.tasks)} 个有效任务")
     async def process_symbol(self, symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp,
                         session: aiohttp.ClientSession):
         # 1. 生成全量日期范围

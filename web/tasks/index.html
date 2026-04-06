@@ -1,0 +1,35 @@
+<div id="view-tasks" class="h-full">
+    <div class="task-exec-layout">
+        <div class="task-list-panel" id="task-selection-list">
+            <!-- Controls -->
+            <div class="list-controls">
+                <button class="btn-xs" onclick="selectAllTasks()">全选</button>
+                <button class="btn-xs" onclick="clearSelection()">清空</button>
+            </div>
+            <!-- Task Items injected here -->
+        </div>
+        <div class="task-config-panel">
+            <h3>执行配置</h3>
+            <div class="form-group">
+                <label>代码 (留空则全市场)</label>
+                <textarea id="exec-symbols" rows="3" placeholder="留空则自动获取选中任务所属市场所有代码，或输入特定代码：600000, 000001"></textarea>
+            </div>
+            <div class="form-group">
+                <label>起始日期 (选填)</label>
+                <input type="date" id="exec-start-date">
+                <small style="color: #888;">留空则从数据库读取上市日期</small>
+            </div>
+            <div class="form-group">
+                <label>结束日期 (选填)</label>
+                <input type="date" id="exec-end-date">
+                <small style="color: #888;">留空则默认为今日</small>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="exec-update"> 强制更新
+                </label>
+            </div>
+            <button class="btn-primary" onclick="submitExecution()">立即执行</button>
+        </div>
+    </div>
+</div>
