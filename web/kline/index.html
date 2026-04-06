@@ -22,20 +22,29 @@
                 <input type="text" id="kline-symbol-manual" list="symbol-list" placeholder="输入代码查看" disabled autocomplete="off">
                 <datalist id="symbol-list"></datalist>
             </div>
+            <!-- 复权选择 (新增) -->
+            <div class="form-group" style="flex:1; margin:0;">
+                <label>复权方式</label>
+                <select id="kline-adj" onchange="loadKline()">
+                    <option value="none">不复权</option>
+                    <option value="qfq">前复权</option>
+                    <!-- 新增后复权选项 -->
+                    <option value="hfq">后复权</option>
+                </select>
+            </div>
             <!-- 时间范围 -->
             <div class="form-group" style="flex:1; margin:0;">
                 <label>时间范围</label>
                 <select id="kline-range" onchange="loadKline()">
                     <option value="1w">最近一周</option>
-                    <option value="1m">最近一个月</option>
-                    <option value="1y" selected>最近一年</option>
+                    <option value="1m" selected>最近一个月</option>
+                    <option value="1y">最近一年</option>
                     <option value="all">全部</option>
                 </select>
             </div>
             <button class="btn-primary" style="height: 36px;" onclick="loadKlineFromInput()" id="btn-load-kline" disabled>查看</button>
         </div>
     </div>
-
     <!-- 主体内容：左侧列表 + 右侧图表 -->
     <div class="kline-layout" style="height: calc(100% - 100px);">
         <!-- 左侧：Symbol 列表 -->
@@ -51,7 +60,6 @@
                 <!-- Symbol cards injected here -->
             </div>
         </div>
-
         <!-- 右侧：K线图 -->
         <div class="kline-container" style="padding:0; background: var(--card-bg); border-radius: 4px;">
             <div class="kline-chart-box" id="kline-chart-area" style="height: 100%;"></div>

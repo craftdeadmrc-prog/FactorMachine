@@ -1,5 +1,5 @@
 *__pycache__*
-data
+data/*
 spider/deprecated
 factor_results
 factor_eval

@@ -108,6 +108,7 @@ async def _fetch_fund_symbols_async():
                 df["symbol"] = symbol
                 df["market"] = market  # 统一市场标识为 fund
                 df["volume"] = df["volume"]*100
+                df["date"] = pd.to_datetime(df["date"])
                 # 写入日线表
                 save_dataframe(df, table_name="kline_1d", db="fund", primary_key=["symbol", "date"])
                 # 返回最早日期作为上市日期
@@ -243,14 +244,10 @@ async def _fetch_crypto_symbols_async():
         except Exception as e:
             logger.warning(f"{symbol} 解析上市日期失败: {e}")
             return None
-
         # 3. 过滤上市不足一年的品种
-        if (pd.Timestamp.now().date() - date).days < 365*2:
+        if (pd.Timestamp.now().date() - date.date()).days < 365*2:
             logger.info(f"{symbol} 上市不足两年，跳过")
             return None
-        print(symbol)
-        print(type(symbol))
-        print(symbol[:-4])
 
         item = {
             'market': 'binance',
