@@ -20,7 +20,7 @@ sys.path.insert(0, project_root)
 from web import task_handler
 from web import log_handler
 from core.storage import load_dataframe
-
+from utils.data import bars
  
 # 导入 talib
 try:
@@ -270,8 +270,7 @@ async def get_kline_overview(market: str, interval: str):
         logger.error(f"Overview error: {e}")
         return clean_nan([{**item, 'close': None, 'pct_change': None} for item in base_data])
  
- 
-@app.get("/api/kline/data")
+@app.get("/api/kline/data") 
 async def get_kline_data( 
     market: str, 
     interval: str, 
@@ -279,7 +278,9 @@ async def get_kline_data(
     range_type: str = "1m",
     start_date: Optional[str] = None, 
     end_date: Optional[str] = None,
-    adj: str = "none"
+    adj: str = "none",
+    bar_type: str = "time",
+    bar_threshold: Optional[float] = None
  ):
     if not re.match(r'^[a-zA-Z0-9_]+$', interval):
         raise HTTPException(status_code=400, detail="Invalid interval format")
@@ -291,7 +292,6 @@ async def get_kline_data(
     if start_date:
         start_dt = pd.to_datetime(start_date)
     else:
-        # ... range logic ...
         if range_type == '1w': start_dt = end_dt - timedelta(weeks=1)
         elif range_type == '1m': start_dt = end_dt - timedelta(days=30)
         elif range_type == '1y': start_dt = end_dt - timedelta(days=365)
@@ -318,27 +318,32 @@ async def get_kline_data(
         
         df = df.sort_values('date').reset_index(drop=True)
  
-        # 修改复权逻辑：同时查询两个因子
+        # 复权逻辑
         if adj in ['qfq', 'hfq']:
             try:
                 check_sql = "SELECT table_name FROM information_schema.tables WHERE table_name = 'adjust_factor'"
                 table_check = await loop.run_in_executor(None, load_dataframe, check_sql, market)
                 if not table_check.empty:
-                    # 同时获取 qfq_factor 和 hfq_factor
                     factor_sql = f"SELECT date, qfq_factor, hfq_factor FROM adjust_factor WHERE symbol = '{symbol}'"
                     df_factor = await loop.run_in_executor(None, load_dataframe, factor_sql, market)
-                    
                     if not df_factor.empty:
-                        if adj == 'qfq':
-                            # 只有当列存在时才计算
-                            if 'qfq_factor' in df_factor.columns:
-                                df = calculate_qfq(df, df_factor[['date', 'qfq_factor']])
-                        elif adj == 'hfq':
-                            if 'hfq_factor' in df_factor.columns:
-                                df = calculate_hfq(df, df_factor[['date', 'hfq_factor']])
+                        if adj == 'qfq' and 'qfq_factor' in df_factor.columns:
+                            df = calculate_qfq(df, df_factor[['date', 'qfq_factor']])
+                        elif adj == 'hfq' and 'hfq_factor' in df_factor.columns:
+                            df = calculate_hfq(df, df_factor[['date', 'hfq_factor']])
             except Exception as e:
                 logger.warning(f"FQ error ({adj}): {e}")
- 
+        
+        # --- 新增 Bar 转换逻辑 ---
+        # 只有在非 time bar 或者 明确指定 bar_type 时才转换
+        # 默认 bar_type 是 time
+        if bar_type != 'time':
+            try:
+                df = bars.generate_bars(df, bar_type=bar_type, threshold=bar_threshold)
+            except Exception as e:
+                logger.error(f"Failed to generate bars: {e}")
+                # 转换失败回退到 time bar
+        
         if 'date' in df.columns:
             df['date'] = df['date'].astype(str)
         
@@ -348,6 +353,7 @@ async def get_kline_data(
     except Exception as e:
         logger.error(f"Failed to load kline data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
  
 # ----------------------
 # 静态文件与生命周期

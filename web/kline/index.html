@@ -1,39 +1,55 @@
 <div id="view-kline" class="h-full">
     <!-- 顶部控制栏 -->
     <div class="kline-controls" style="margin-bottom: 16px; background: var(--card-bg); padding: 16px; border-radius: 4px;">
-        <div style="display: flex; gap: 16px; align-items: flex-end;">
+        <div style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;">
             <!-- 市场选择 -->
-            <div class="form-group" style="flex:1; margin:0;">
+            <div class="form-group" style="flex:1; min-width: 120px; margin:0;">
                 <label>市场</label>
                 <select id="kline-market" onchange="onMarketChange()">
                     <option value="">选择市场</option>
                 </select>
             </div>
             <!-- 周期选择 -->
-            <div class="form-group" style="flex:1; margin:0;">
+            <div class="form-group" style="flex:1; min-width: 120px; margin:0;">
                 <label>周期</label>
                 <select id="kline-interval" disabled onchange="onIntervalChange()">
                     <option value="">请先选择市场</option>
                 </select>
             </div>
             <!-- 手动输入 -->
-            <div class="form-group" style="flex:1; margin:0;">
+            <div class="form-group" style="flex:1; min-width: 120px; margin:0;">
                 <label>代码 (手动输入)</label>
                 <input type="text" id="kline-symbol-manual" list="symbol-list" placeholder="输入代码查看" disabled autocomplete="off">
                 <datalist id="symbol-list"></datalist>
             </div>
-            <!-- 复权选择 (新增) -->
-            <div class="form-group" style="flex:1; margin:0;">
+            
+            <!-- Bar 类型选择 (新增) -->
+            <div class="form-group" style="flex:1; min-width: 100px; margin:0;">
+                <label>Bar类型</label>
+                <select id="kline-bar-type" onchange="onBarTypeChange()">
+                    <option value="time">Time Bar</option>
+                    <option value="volume">Volume Bar</option>
+                    <option value="cusum">CUSUM Bar</option>
+                </select>
+            </div>
+
+            <!-- 阈值输入 (新增) -->
+            <div class="form-group" style="flex:1; min-width: 100px; margin:0; display: none;" id="kline-threshold-group">
+                <label>阈值</label>
+                <input type="number" id="kline-bar-threshold" placeholder="如 1000000" value="1000000" step="any">
+            </div>
+
+            <!-- 复权选择 -->
+            <div class="form-group" style="flex:1; min-width: 100px; margin:0;">
                 <label>复权方式</label>
                 <select id="kline-adj" onchange="loadKline()">
                     <option value="none">不复权</option>
                     <option value="qfq">前复权</option>
-                    <!-- 新增后复权选项 -->
                     <option value="hfq">后复权</option>
                 </select>
             </div>
             <!-- 时间范围 -->
-            <div class="form-group" style="flex:1; margin:0;">
+            <div class="form-group" style="flex:1; min-width: 100px; margin:0;">
                 <label>时间范围</label>
                 <select id="kline-range" onchange="loadKline()">
                     <option value="1w">最近一周</option>

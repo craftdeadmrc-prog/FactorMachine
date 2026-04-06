@@ -184,6 +184,27 @@ async function loadKlineFromInput() {
         loadKline(symbol);
     }
 }
+function onBarTypeChange() {
+    const barType = document.getElementById('kline-bar-type').value;
+    const thresholdGroup = document.getElementById('kline-threshold-group');
+    const thresholdInput = document.getElementById('kline-bar-threshold');
+    
+    if (barType === 'time') {
+        thresholdGroup.style.display = 'none';
+    } else {
+        thresholdGroup.style.display = 'block';
+        if (barType === 'volume') {
+            thresholdInput.placeholder = "如 1000000";
+            thresholdInput.value = "1000000";
+            thresholdInput.step = "any";
+        } else if (barType === 'cusum') {
+            thresholdInput.placeholder = "如 0.02 (2%)";
+            thresholdInput.value = "0.02";
+            thresholdInput.step = "0.01";
+        }
+    }
+}
+
 async function loadKline(symbol) {
     if(!symbol) return;
     const market = document.getElementById('kline-market').value;
@@ -191,6 +212,12 @@ async function loadKline(symbol) {
     const rangeType = document.getElementById('kline-range').value;
     const adjSelect = document.getElementById('kline-adj');
     const adjType = adjSelect ? adjSelect.value : 'none';
+    
+    // 新增获取 Bar 参数
+    const barType = document.getElementById('kline-bar-type').value;
+    const thresholdInput = document.getElementById('kline-bar-threshold');
+    const threshold = (barType !== 'time' && thresholdInput.value) ? parseFloat(thresholdInput.value) : null;
+
     if (!market || !interval) return;
     if (!klineChart) {
         init_kline();
@@ -203,9 +230,14 @@ async function loadKline(symbol) {
             interval: interval,
             symbol: symbol,
             range_type: rangeType,
-            adj: adjType
+            adj: adjType,
+            bar_type: barType // 新增
         });
-        // 使用 fetch 替代 API 对象
+        
+        if (threshold !== null) {
+            params.append('bar_threshold', threshold);
+        }
+
         const response = await fetch(`/api/kline/data?${params.toString()}`);
         const rawData = await response.json();
         if (rawData && rawData.detail) {
@@ -219,9 +251,12 @@ async function loadKline(symbol) {
             });
             return;
         }
-        const dates = [];
+        const dates = []; // 这里实际上可能是区间标签
         const ohlc = [];
         const volumes = [];
+        // 新增：时间消耗序列
+        const ticks = []; 
+
         rawData.forEach(item => {
             dates.push(item.date);
             ohlc.push([
@@ -231,8 +266,12 @@ async function loadKline(symbol) {
                 parseFloat(item.high) || 0
             ]);
             volumes.push(parseFloat(item.volume) || 0);
+            // 新增：读取 ticks
+            ticks.push(parseFloat(item.ticks) || 1); // 如果没有 ticks 字段默认为 1
         });
-        renderChart(symbol, dates, ohlc, volumes);
+        
+        // 传入 ticks
+        renderChart(symbol, dates, ohlc, volumes, ticks, barType);
     } catch (e) {
         console.error("Load kline failed", e);
         alert("加载失败: " + e.message);
@@ -245,12 +284,47 @@ async function loadKline(symbol) {
         }
     }
 }
-function renderChart(symbol, dates, ohlc, volumes) {
+function renderChart(symbol, dates, ohlc, volumes, ticks, barType) {
     if (!klineChart) return;
-    
-    // 【修复】图表渲染前先隐藏 Loading 遮罩
     klineChart.hideLoading(); 
     
+    let series = [];
+    let grids = [];
+    let xAxes = [];
+    let yAxes = [];
+    
+    // 基础 K 线配置
+    grids.push({ left: '10%', right: '8%', top: '10%', height: '50%' });
+    xAxes.push({ type: 'category', data: dates, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' });
+    yAxes.push({ scale: true, splitArea: { show: true } });
+    series.push({
+        name: 'K线', type: 'candlestick', data: ohlc,
+        itemStyle: { color: '#ef5350', color0: '#26a69a', borderColor: '#ef5350', borderColor0: '#26a69a' }
+    });
+
+    // 底部指标配置
+    if (barType === 'time') {
+        // 默认模式：显示成交量
+        grids.push({ left: '10%', right: '8%', top: '70%', height: '15%' });
+        xAxes.push({ type: 'category', gridIndex: 1, data: dates, boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' });
+        yAxes.push({ scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } });
+        series.push({ 
+            name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, 
+            itemStyle: { color: '#26a69a' } 
+        });
+    } else {
+        // Volume / Cusum Bar 模式：底部显示 "Time/Ticks 消耗"
+        // 替换原本的成交量图
+        grids.push({ left: '10%', right: '8%', top: '70%', height: '15%' });
+        xAxes.push({ type: 'category', gridIndex: 1, data: dates, boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' });
+        yAxes.push({ scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } });
+        
+        series.push({ 
+            name: '时间消耗', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: ticks, 
+            itemStyle: { color: '#5470c6' } // 用不同颜色区分
+        });
+    }
+
     const option = {
         title: { text: symbol.toUpperCase(), left: 'center' },
         tooltip: { 
@@ -260,33 +334,15 @@ function renderChart(symbol, dates, ohlc, volumes) {
             borderColor: '#eee',
             textStyle: { color: '#333' }
         },
-        legend: { data: ['K线', '成交量'], bottom: 10 },
-        grid: [
-            { left: '10%', right: '8%', top: '10%', height: '50%' },
-            { left: '10%', right: '8%', top: '70%', height: '15%' }
-        ],
-        xAxis: [
-            { type: 'category', data: dates, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' },
-            { type: 'category', gridIndex: 1, data: dates, boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' }
-        ],
-        yAxis: [
-            { scale: true, splitArea: { show: true } },
-            { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
-        ],
+        legend: { data: ['K线', barType === 'time' ? '成交量' : '时间消耗'], bottom: 10 },
+        grid: grids,
+        xAxis: xAxes,
+        yAxis: yAxes,
         dataZoom: [
             { type: 'inside', xAxisIndex: [0, 1], start: 50, end: 100 },
             { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: 50, end: 100 }
         ],
-        series: [
-            {
-                name: 'K线', type: 'candlestick', data: ohlc,
-                itemStyle: { color: '#ef5350', color0: '#26a69a', borderColor: '#ef5350', borderColor0: '#26a69a' }
-            },
-            { 
-                name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, 
-                itemStyle: { color: '#26a69a' } 
-            }
-        ]
+        series: series
     };
     klineChart.setOption(option, true);
 }
