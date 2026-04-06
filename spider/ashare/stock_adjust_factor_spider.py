@@ -130,7 +130,8 @@ class StockAdjustFactorSpider(BaseSpider):
                     db=self.market,
                     primary_key=["symbol", "date"]
                 )
-                logger.info(f"股票 {code} 前后复权因子已保存，共 {len(adjust_df)} 条")
+                if idx % 10 == 0:
+                    logger.info(f"股票 {code} 前后复权因子已保存，共 {len(adjust_df)} 条")
             except Exception as e:
                 logger.error(f"插入股票 {code} 前后复权因子失败: {e}")
 

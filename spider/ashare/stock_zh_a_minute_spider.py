@@ -6,7 +6,7 @@ import akshare as ak
 from typing import List, Dict
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe
-from core.proxy import proxy_pool, PROXY_FILE
+from core.proxy import proxy_pool, _proxy_list
 from core.scheduler import task
 logger = logging.getLogger(__name__)
 @task(description="获取A股分钟线行情数据（新浪/东财）")
@@ -68,6 +68,8 @@ class StockZhAMinuteSpider(BaseSpider):
                     period='1',
                     adjust=""  # 不复权
                 )
+                if len(_proxy_list)<=1:
+                    await asyncio.sleep(1)  # 无代理时适当等待，避免频率过快被封
             except Exception as e:
                 logger.error(f"获取股票 {code} 分钟线失败: {e}")
                 return

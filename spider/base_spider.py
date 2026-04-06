@@ -88,7 +88,11 @@ class BaseSpider(abc.ABC):
             except Exception as e:
                 logger.error(f"Failed to query max dates: {e}")
         # 遍历任务列表进行筛选
-        now = pd.Timestamp.now().date() if pd.Timestamp.now().hour>16 else pd.Timestamp.now().date()-pd.Timedelta(days=1)
+        now = pd.Timestamp.now().date()
+        if pd.Timestamp.now().hour<=16:
+            now = now-pd.Timedelta(days=1)
+        if self.market!='crypto' and now.weekday() >= 5:  # 周末
+            now = now - pd.Timedelta(days=(now.weekday() - 4))
         for task in self.tasks:
             symbol = task['symbol']
             # 情况1: symbol 不在数据库中，保留任务（全量获取）

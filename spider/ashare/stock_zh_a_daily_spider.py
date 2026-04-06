@@ -2,8 +2,6 @@ import asyncio
 import logging
 import pandas as pd
 import akshare as ak
-from datetime import date, datetime
-from typing import List, Dict
 
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe

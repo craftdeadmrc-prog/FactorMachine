@@ -73,7 +73,8 @@ class EtfDailySinaSpider(BaseSpider):
                     db=self.market,
                     primary_key=["symbol", "date"]
                 )
-                logger.info(f"ETF {code} 日线数据已保存，共 {len(df)} 条")
+                if idx % 10 == 0:
+                    logger.info(f"ETF {code} 日线数据已保存，共 {len(df)} 条")
             except Exception as e:
                 logger.error(f"插入ETF {code} 日线数据失败: {e}")
 

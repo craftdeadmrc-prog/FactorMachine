@@ -1,6 +1,5 @@
 import logging
 import threading
-import time
 import requests
 from requests.exceptions import RequestException
 from core.config import PROXY_FILE

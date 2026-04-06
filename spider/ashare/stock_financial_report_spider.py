@@ -371,7 +371,7 @@ class StockFinancialReportSpider(BaseSpider):
         total_reports = total_stocks * len(self.symbol_map)  # 总报表数
         logger.info(f"{self.__class__.__name__}: 开始处理 {total_stocks} 只股票，共 {total_reports} 份报表")
 
-        completed = 0
+        idx = 0
 
         for task in self.tasks:
             symbol = task['symbol']
@@ -379,8 +379,8 @@ class StockFinancialReportSpider(BaseSpider):
             stock = f"{market}{symbol}"  # 例如 sh600000
 
             for report_type_cn, table_name in self.symbol_map.items():
-                completed += 1
-                logger.info(f"{self.__class__.__name__} [{completed}/{total_reports}] 正在处理 {symbol} {report_type_cn}")
+                idx += 1
+                logger.info(f"{self.__class__.__name__} [{idx}/{total_reports}] 正在处理 {symbol} {report_type_cn}")
 
                 # 使用代理池爬取
                 try:
@@ -409,7 +409,8 @@ class StockFinancialReportSpider(BaseSpider):
                         db=self.market,
                         primary_key=["symbol", "date"]
                     )
-                    logger.info(f"股票 {symbol} {report_type_cn} 数据已保存，共 {len(df)} 条")
+                    if idx % 10 == 0:
+                        logger.info(f"股票 {symbol} {report_type_cn} 数据已保存，共 {len(df)} 条")
                 except Exception as e:
                     logger.error(f"插入股票 {symbol} {report_type_cn} 数据失败: {e}")
 
