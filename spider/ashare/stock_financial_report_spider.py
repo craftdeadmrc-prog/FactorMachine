@@ -25,7 +25,7 @@ class StockFinancialReportSpider(BaseSpider):
 
     _COLUMN_MAP = {
         "资产负债表": {
-            "报告日": "date",
+            "公告日期": "date",
             "货币资金": "cash_equivalents",
             "结算备付金": "settlement_provi",
             "拆出资金": "lend_capital",
@@ -141,7 +141,7 @@ class StockFinancialReportSpider(BaseSpider):
             "负债及股东权益总计": "total_sheet_owner_equities"  # 银行特殊列名
         },
         "利润表": {
-            "报告日": "date",
+            "公告日期": "date",
             "营业总收入": "total_operating_revenue",
             "营业收入": "operating_revenue",
             "利息收入": "interest_income",
@@ -199,7 +199,7 @@ class StockFinancialReportSpider(BaseSpider):
             "少数股东权益": "minority_profit"  # 银行特殊列名
         },
         "现金流量表": {
-            "报告日": "date",
+            "公告日期": "date",
             "销售商品、提供劳务收到的现金": "goods_sale_and_service_render_cash",
             "客户存款和同业存放款项净增加额": "net_deposit_increase",
             "向中央银行借款净增加额": "net_borrowing_from_central_bank",
@@ -336,20 +336,20 @@ class StockFinancialReportSpider(BaseSpider):
             if df.empty:
                 # 表为空或无匹配记录，无需过滤
                 return
-            # 3. 计算三个月前的时间点
+            # 3. 计算四个月前的时间点
             # 使用 pd.DateOffset 处理月份跨度，确保逻辑准确
-            three_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=3)
+            four_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=4)
             # 确保 date 是 datetime 类型
             df['date'] = pd.to_datetime(df['date'])
             # 4. 筛选出需要过滤的 symbol
-            # 条件：最新日期 >= 三个月前（即距离今日不超过三个月）
+            # 条件：最新日期 >= 四个月前（即距离今日不超过四个月）
             recent_symbols = set(
-                df[df['date'] >= three_months_ago]['symbol']
+                df[df['date'] >= four_months_ago]['symbol']
             )
             if recent_symbols:
                 # 过滤任务：保留 symbol 不在 recent_symbols 中的任务
                 self.tasks = [t for t in self.tasks if t.get("symbol") not in recent_symbols]
-                logger.info(f"过滤掉最近3个月已更新的 {len(recent_symbols)} 只财报数据，剩余 {len(self.tasks)} 个任务")
+                logger.info(f"过滤掉最近4个月已更新的 {len(recent_symbols)} 只财报数据，剩余 {len(self.tasks)} 个任务")
         except Exception as e:
             error_msg = str(e).lower()
             # 表不存在是正常情况（首次运行），使用 INFO 级别日志
@@ -358,107 +358,177 @@ class StockFinancialReportSpider(BaseSpider):
             else:
                 logger.error(f"检查财报数据更新状态失败: {e}")
 
+
+    def _check_existing_dates(self, symbol: str, dates: List[pd.Timestamp], table_name: str):
+        """
+        检查指定股票在给定表中已存在的日期集合。
+        :param symbol: 股票代码
+        :param dates: 待检查的日期列表
+        :param table_name: 表名（如 'balance'）
+        :return: 已存在的日期集合（与输入 dates 中的元素类型一致）
+        """
+        if not dates:
+            return set()
+        # 将日期转换为字符串格式，便于 SQL 比较
+        date_strs = [d.strftime('%Y-%m-%d') for d in dates]
+        in_clause = "', '".join(date_strs)
+        sql = f"""
+            SELECT DISTINCT date
+            FROM {table_name}
+            WHERE symbol = '{symbol}' AND date IN ('{in_clause}')
+        """
+        try:
+            df = load_dataframe(sql, db=self.market)
+            if df.empty:
+                return set()
+            # 将返回的日期列转换回 Timestamp 类型
+            existing_dates = set(pd.to_datetime(df['date']))
+            return existing_dates
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "does not exist" in error_msg:
+                logger.info(f"Table {table_name} 尚未初始化，视为无已存在数据")
+                return set()
+            else:
+                logger.error(f"查询 {table_name} 已存在日期失败: {e}")
+                return set()
+
     async def run(self):
         """
         扫描 tasks 中的股票，对每只股票爬取三种财务报表并分别存入对应表。
-        进度通过 logger.info 输出，不再使用 rich progress。
+        优化：若资产负债表的全部报告期均已存在，则跳过利润表和现金流量表。
         """
         if not self.tasks:
             logger.info("No tasks to run.")
             return
 
         total_stocks = len(self.tasks)
-        total_reports = total_stocks * len(self.symbol_map)  # 总报表数
+        total_reports = total_stocks * len(self.symbol_map)  # 理论最大报表数
         logger.info(f"{self.__class__.__name__}: 开始处理 {total_stocks} 只股票，共 {total_reports} 份报表")
 
         idx = 0
+        balance_table = self.symbol_map["资产负债表"]
 
         for task in self.tasks:
             symbol = task['symbol']
             market = task['market']
-            stock = f"{market}{symbol}"  # 例如 sh600000
+            stock = f"{market}{symbol}"
 
-            for report_type_cn, table_name in self.symbol_map.items():
-                idx += 1
-                logger.info(f"{self.__class__.__name__} [{idx}/{total_reports}] 正在处理 {symbol} {report_type_cn}")
+            # ---- 1. 先处理资产负债表 ----
+            report_type_cn = "资产负债表"
+            table_name = balance_table
+            idx += 1
+            logger.info(f"{self.__class__.__name__} [{idx}/{total_reports}] 正在处理 {symbol} {report_type_cn}")
 
-                # 使用代理池爬取
-                try:
-                    df = await asyncio.to_thread(
-                        proxy_pool,
-                        ak.stock_financial_report_sina,
-                        stock=stock,
-                        symbol=report_type_cn,
-                    )
-                except Exception as error:
-                    logger.error(f"获取股票 {symbol} {report_type_cn} 数据失败: {error}")
-                    continue
-
-                if df.empty:
-                    logger.warning(f"股票 {symbol} {report_type_cn} 返回空数据")
-                    continue
-
-                # 清洗数据
-                df = self._rename_columns(df, symbol, market, report_type_cn)
-
-                # 插入数据库
-                try:
-                    save_dataframe(
-                        df,
-                        table_name=table_name,
-                        db=self.market,
-                        primary_key=["symbol", "date"]
-                    )
-                    if idx % 10 == 0:
-                        logger.info(f"股票 {symbol} {report_type_cn} 数据已保存，共 {len(df)} 条")
-                except Exception as e:
-                    logger.error(f"插入股票 {symbol} {report_type_cn} 数据失败: {e}")
-
-                # await asyncio.sleep(random.randint(1, 3))
-
-        # 爬取完成后，检查并清理全空列
-        self._clean_empty_columns()
-
-        logger.info(f"{self.__class__.__name__}: 财务数据抓取完成，共处理 {total_stocks} 只股票")
-
-    def _clean_empty_columns(self):
-        """
-        对三张表分别检查是否存在整列全为空的列，若有则打印列名（供修正映射表）。
-        注意：不实际删除列，仅输出报告。
-        """
-        for table_name in self.table_names:
-            # 获取表的所有列名：通过查询一条记录来获取列结构
             try:
-                # 查询一行数据，获取列名
-                sample_sql = f"SELECT * FROM {table_name} LIMIT 1"
-                sample_df = load_dataframe(sample_sql, db=self.market)
-                if sample_df.empty:
-                    # 表为空，无法检查全空列，跳过
-                    logger.info(f"表 {table_name} 为空，跳过全空列检查")
-                    continue
-                columns = sample_df.columns.tolist()
-            except Exception as e:
-                logger.error(f"获取表 {table_name} 的列信息失败: {e}")
+                df_balance = await asyncio.to_thread(
+                    proxy_pool,
+                    ak.stock_financial_report_sina,
+                    stock=stock,
+                    symbol=report_type_cn,
+                )
+            except Exception as error:
+                logger.error(f"获取股票 {symbol} {report_type_cn} 数据失败: {error}")
                 continue
 
-            # 检查每个非主键列是否整列为空
-            columns_to_report = []
-            for col in columns:
-                # 跳过主键列
-                if col in ['symbol', 'date', 'market']:
-                    continue
-                # 查询该列非空记录数
-                check_sql = f"SELECT COUNT(*) FROM {table_name} WHERE {col} IS NOT NULL"
-                try:
-                    count_df = load_dataframe(check_sql, db=self.market)
-                    non_null_count = count_df.iloc[0, 0] if not count_df.empty else 0
-                    if non_null_count == 0:
-                        columns_to_report.append(col)
-                except Exception as e:
-                    logger.error(f"检查表 {table_name} 列 {col} 的空值情况失败: {e}")
+            if df_balance.empty:
+                logger.warning(f"股票 {symbol} {report_type_cn} 返回空数据，跳过该股票剩余报表")
+                continue
 
-            if columns_to_report:
-                # 只打印，不实际删除列
-                logger.info(f"表 {table_name} 全空列：{columns_to_report}")
+            # 清洗资产负债表
+            df_balance = self._rename_columns(df_balance, symbol, market, report_type_cn)
+
+            # 获取该股票本次抓取到的所有报告日期
+            fetched_dates = set(df_balance['date'].drop_duplicates())
+
+            # 检查这些日期在数据库 balance 表中是否已存在
+            existing_dates = self._check_existing_dates(symbol, fetched_dates, balance_table)
+
+            # 如果所有日期都已存在，则跳过利润表和现金流量表
+            if fetched_dates.issubset(existing_dates):
+                logger.info(f"股票 {symbol} 资产负债表的所有报告期 ({len(fetched_dates)} 个) 均已存在，跳过利润表和现金流量表")
+                # 注意：资产负债表本身也不再重复插入（因为全部已存在）
+                continue
+
+            # 否则，保存资产负债表（save_dataframe 会自动去重）
+            try:
+                save_dataframe(
+                    df_balance,
+                    table_name=balance_table,
+                    db=self.market,
+                    primary_key=["symbol", "date"]
+                )
+                logger.info(f"股票 {symbol} 资产负债表已保存，共 {len(df_balance)} 条")
+            except Exception as e:
+                logger.error(f"插入股票 {symbol} 资产负债表数据失败: {e}")
+                # 即使保存失败，是否继续处理利润表？保守起见继续，但记录错误
+                # 可根据业务需求决定是否 continue
+
+            # ---- 2. 处理利润表 ----
+            report_type_cn = "利润表"
+            table_name = self.symbol_map[report_type_cn]
+            idx += 1
+            logger.info(f"{self.__class__.__name__} [{idx}/{total_reports}] 正在处理 {symbol} {report_type_cn}")
+
+            try:
+                df_income = await asyncio.to_thread(
+                    proxy_pool,
+                    ak.stock_financial_report_sina,
+                    stock=stock,
+                    symbol=report_type_cn,
+                )
+            except Exception as error:
+                logger.error(f"获取股票 {symbol} {report_type_cn} 数据失败: {error}")
+                # 继续处理现金流量表
             else:
-                logger.info(f"表 {table_name} 无全空列")
+                if not df_income.empty:
+                    df_income = self._rename_columns(df_income, symbol, market, report_type_cn)
+                    try:
+                        save_dataframe(
+                            df_income,
+                            table_name=table_name,
+                            db=self.market,
+                            primary_key=["symbol", "date"]
+                        )
+                        logger.info(f"股票 {symbol} 利润表已保存，共 {len(df_income)} 条")
+                    except Exception as e:
+                        logger.error(f"插入股票 {symbol} 利润表数据失败: {e}")
+                else:
+                    logger.warning(f"股票 {symbol} 利润表返回空数据")
+
+            # ---- 3. 处理现金流量表 ----
+            report_type_cn = "现金流量表"
+            table_name = self.symbol_map[report_type_cn]
+            idx += 1
+            logger.info(f"{self.__class__.__name__} [{idx}/{total_reports}] 正在处理 {symbol} {report_type_cn}")
+
+            try:
+                df_cashflow = await asyncio.to_thread(
+                    proxy_pool,
+                    ak.stock_financial_report_sina,
+                    stock=stock,
+                    symbol=report_type_cn,
+                )
+            except Exception as error:
+                logger.error(f"获取股票 {symbol} {report_type_cn} 数据失败: {error}")
+                continue
+            else:
+                if not df_cashflow.empty:
+                    df_cashflow = self._rename_columns(df_cashflow, symbol, market, report_type_cn)
+                    try:
+                        save_dataframe(
+                            df_cashflow,
+                            table_name=table_name,
+                            db=self.market,
+                            primary_key=["symbol", "date"]
+                        )
+                        logger.info(f"股票 {symbol} 现金流量表已保存，共 {len(df_cashflow)} 条")
+                    except Exception as e:
+                        logger.error(f"插入股票 {symbol} 现金流量表数据失败: {e}")
+                else:
+                    logger.warning(f"股票 {symbol} 现金流量表返回空数据")
+
+            # 可选：控制请求频率
+            # await asyncio.sleep(random.randint(1, 3))
+        logger.info(f"{self.__class__.__name__}: 财务数据抓取完成，共处理 {total_stocks} 只股票")
+
