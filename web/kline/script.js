@@ -29,15 +29,6 @@ function init_kline() {
     });
 }
 
-function destroy_kline() {
-    if (klineChart) {
-        klineChart.dispose();
-        klineChart = null;
-    }
-    allOverviewData = [];
-    renderedCount = 0;
-    fullKlineData = []; // 清空缓存
-}
 async function populateMarkets() {
     try {
         const res = await fetch('/api/tasks');
@@ -182,13 +173,6 @@ function loadMoreSymbols() {
     container.appendChild(fragment);
     renderedCount = end;
 }
-async function loadKlineFromInput() {
-    const symbol = document.getElementById('kline-symbol-manual').value.trim();
-    if(symbol) {
-        currentSymbol = symbol;
-        loadKline(symbol);
-    }
-}
 function onBarTypeChange() {
     const barType = document.getElementById('kline-bar-type').value;
     const thresholdGroup = document.getElementById('kline-threshold-group');
@@ -210,6 +194,14 @@ function onBarTypeChange() {
     }
 }
 
+// 全局数据缓存，用于增量更新
+let currentKlineData = {
+    dates: [],
+    ohlc: [],
+    volumes: [],
+    ticks: []
+};
+
 async function loadKlineFromInput() {
     const symbol = document.getElementById('kline-symbol-manual').value.trim();
     if(symbol) {
@@ -218,7 +210,6 @@ async function loadKlineFromInput() {
     }
 }
 
-// 核心改造：分块加载逻辑
 async function loadKline(symbol) {
     if(!symbol) return;
     const market = document.getElementById('kline-market').value;
@@ -237,10 +228,20 @@ async function loadKline(symbol) {
         if(!klineChart) return;
     }
 
-    // 重置状态
-    fullKlineData = [];
+    // 1. 重置状态
+    currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
     klineChart.clear();
-    klineChart.showLoading('default', { text: '正在加载数据 (0%)...', color: '#c23531', textColor: '#fff', maskColor: 'rgba(0, 0, 0, 0.3)' });
+    
+    // 初始化图表配置（空数据），设置大数优化参数
+    // 这样后续只需追加数据即可
+    initEmptyChart(symbol, barType);
+
+    klineChart.showLoading('default', { 
+        text: '正在加载数据 (0%)...', 
+        color: '#c23531', 
+        textColor: '#fff', 
+        maskColor: 'rgba(0, 0, 0, 0.3)' 
+    });
 
     let offset = 0;
     const limit = 50000; // 每次请求 5 万条
@@ -264,6 +265,7 @@ async function loadKline(symbol) {
                 params.append('bar_threshold', threshold);
             }
 
+            // 2. 请求一个分块
             const response = await fetch(`/api/kline/data?${params.toString()}`);
             const result = await response.json();
             
@@ -272,158 +274,195 @@ async function loadKline(symbol) {
             }
 
             if (!result.data || result.data.length === 0) {
+                // 如果是第一页就没数据
+                if (offset === 0) {
+                    klineChart.hideLoading();
+                    klineChart.setOption({ 
+                        title: { text: '无数据', subtext: '数据库中未找到记录', left: 'center', top: 'center' } 
+                    });
+                }
                 break;
             }
 
-            // 更新总数
+            // 3. 记录总数（用于进度计算）
             if (total === 0 && result.total) {
                 total = result.total;
             }
 
-            // 拼接数据
-            fullKlineData = fullKlineData.concat(result.data);
+            // 4. 解析新数据
+            const newChunk = parseKlineData(result.data);
 
-            // 更新进度
-            const progress = total > 0 ? Math.round((fullKlineData.length / total) * 100) : 50;
+            // 5. 增量更新全局缓存
+            currentKlineData.dates.push(...newChunk.dates);
+            currentKlineData.ohlc.push(...newChunk.ohlc);
+            currentKlineData.volumes.push(...newChunk.volumes);
+            currentKlineData.ticks.push(...newChunk.ticks);
+
+            // 6. 增量渲染图表
+            appendDataToChart(newChunk, barType, offset === 0);
+
+            // 7. 更新进度
+            const progress = total > 0 ? Math.round((currentKlineData.dates.length / total) * 100) : 50;
             klineChart.hideLoading();
             klineChart.showLoading('default', { text: `正在加载数据 (${progress}%)...` });
 
-            // 判断是否继续
+            // 8. 判断是否继续
             if (result.data.length < limit) {
                 hasMore = false;
             } else {
                 offset += limit;
-                // 安全限制：防止前端内存爆掉，限制最大加载 100 万条
-                if (offset >= 1000000) {
-                    console.warn("Reached client-side limit of 1,000,000 candles.");
+                // 安全限制：前端内存保护，防止浏览器崩溃
+                if (currentKlineData.dates.length >= 1500000) { 
+                    console.warn("Reached client-side memory limit.");
                     hasMore = false;
-                    // 可选：提示用户
                 }
             }
         }
 
         klineChart.hideLoading();
-        
-        if (fullKlineData.length === 0) {
-             klineChart.setOption({ 
-                title: { text: '无数据', subtext: '数据库中未找到记录', left: 'center', top: 'center' } 
-            });
-            return;
-        }
-
-        // 数据解析
-        const dates = [];
-        const ohlc = [];
-        const volumes = [];
-        const ticks = [];
-
-        fullKlineData.forEach(item => {
-            dates.push(item.date);
-            ohlc.push([
-                parseFloat(item.open) || 0,
-                parseFloat(item.close) || 0,
-                parseFloat(item.low) || 0,
-                parseFloat(item.high) || 0
-            ]);
-            volumes.push(parseFloat(item.volume) || 0);
-            ticks.push(parseFloat(item.ticks) || 1);
-        });
-
-        // 渲染图表
-        renderChart(symbol, dates, ohlc, volumes, ticks, barType);
 
     } catch (e) {
         console.error("Load kline failed", e);
         alert("加载失败: " + e.message);
         if (klineChart) {
             klineChart.hideLoading();
-            klineChart.clear();
-            klineChart.setOption({ 
-                title: { text: '加载错误', subtext: e.message, left: 'center', top: 'center' } 
-            });
+            // 保持当前已加载的数据，仅显示错误提示
+            if (currentKlineData.dates.length === 0) {
+                klineChart.clear();
+                klineChart.setOption({ 
+                    title: { text: '加载错误', subtext: e.message, left: 'center', top: 'center' } 
+                });
+            }
         }
     }
 }
 
-function renderChart(symbol, dates, ohlc, volumes, ticks, barType) {
-    if (!klineChart) return;
-    
-    let series = [];
-    let grids = [];
-    let xAxes = [];
-    let yAxes = [];
-    
-    // 性能优化配置
+/**
+ * 解析原始数据为图表所需格式
+ */
+function parseKlineData(rawData) {
+    const dates = [];
+    const ohlc = [];
+    const volumes = [];
+    const ticks = [];
+
+    rawData.forEach(item => {
+        dates.push(item.date);
+        ohlc.push([
+            parseFloat(item.open) || 0,
+            parseFloat(item.close) || 0,
+            parseFloat(item.low) || 0,
+            parseFloat(item.high) || 0
+        ]);
+        volumes.push(parseFloat(item.volume) || 0);
+        ticks.push(parseFloat(item.ticks) || 1);
+    });
+
+    return { dates, ohlc, volumes, ticks };
+}
+
+/**
+ * 初始化一个空的图表框架，配置好大数优化参数
+ */
+function initEmptyChart(symbol, barType) {
     const performanceOpts = {
-        large: true,          // 开启大数据优化
-        largeThreshold: 2000, // 超过 2000 条数据开启优化
-        progressive: 1000,    // 渐进式渲染，每次渲染 1000 条
-        progressiveThreshold: 5000, // 超过 5000 条开启渐进式
-        animation: false      // 关闭动画，大幅提升性能
+        large: true,
+        largeThreshold: 2000,
+        progressive: 2000,       // 渐进式渲染数量
+        progressiveThreshold: 10000,
+        animation: false
     };
-
-    // 基础 K 线配置
-    grids.push({ left: '10%', right: '8%', top: '10%', height: '50%' });
-    xAxes.push({ 
-        type: 'category', 
-        data: dates, 
-        boundaryGap: false, 
-        axisLine: { onZero: false }, 
-        splitLine: { show: false }, 
-        min: 'dataMin', 
-        max: 'dataMax' 
-    });
-    yAxes.push({ scale: true, splitArea: { show: true } });
-    
-    series.push({
-        name: 'K线', 
-        type: 'candlestick', 
-        data: ohlc,
-        ...performanceOpts, // 应用性能优化
-        itemStyle: { color: '#ef5350', color0: '#26a69a', borderColor: '#ef5350', borderColor0: '#26a69a' }
-    });
-
-    // 底部指标配置
-    if (barType === 'time') {
-        grids.push({ left: '10%', right: '8%', top: '70%', height: '15%' });
-        xAxes.push({ type: 'category', gridIndex: 1, data: dates, boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' });
-        yAxes.push({ scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } });
-        series.push({ 
-            name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, 
-            ...performanceOpts, // 应用性能优化
-            itemStyle: { color: '#26a69a' } 
-        });
-    } else {
-        grids.push({ left: '10%', right: '8%', top: '70%', height: '15%' });
-        xAxes.push({ type: 'category', gridIndex: 1, data: dates, boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' });
-        yAxes.push({ scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } });
-        
-        series.push({ 
-            name: '时间消耗', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: ticks, 
-            ...performanceOpts, // 应用性能优化
-            itemStyle: { color: '#5470c6' }
-        });
-    }
 
     const option = {
         title: { text: symbol.toUpperCase(), left: 'center' },
         tooltip: { 
             trigger: 'axis', 
-            axisPointer: { type: 'cross' },
-            backgroundColor: 'rgba(255, 255, 255, 0.9)',
-            borderColor: '#eee',
-            textStyle: { color: '#333' }
-            // 注意：在大数据量下，tooltip 可能会慢，可以考虑 confine: true
+            axisPointer: { type: 'cross' }
         },
         legend: { data: ['K线', barType === 'time' ? '成交量' : '时间消耗'], bottom: 10 },
-        grid: grids,
-        xAxis: xAxes,
-        yAxis: yAxes,
+        axisPointer: { link: [{ xAxisIndex: 'all' }] },
+        grid: [
+            { left: '10%', right: '8%', top: '10%', height: '50%' },
+            { left: '10%', right: '8%', top: '70%', height: '15%' }
+        ],
+        xAxis: [
+            { type: 'category', data: [], boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' },
+            { type: 'category', gridIndex: 1, data: [], boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' }
+        ],
+        yAxis: [
+            { scale: true, splitArea: { show: true } },
+            { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
+        ],
         dataZoom: [
-            { type: 'inside', xAxisIndex: [0, 1], start: 80, end: 100 }, // 默认显示最近 20%，避免初始渲染所有点
+            { type: 'inside', xAxisIndex: [0, 1], start: 80, end: 100 }, // 默认显示最新的20%
             { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: 80, end: 100 }
         ],
-        series: series
+        series: [
+            { 
+                name: 'K线', type: 'candlestick', data: [], 
+                ...performanceOpts,
+                itemStyle: { color: '#ef5350', color0: '#26a69a', borderColor: '#ef5350', borderColor0: '#26a69a' }
+            },
+            { 
+                name: barType === 'time' ? '成交量' : '时间消耗', 
+                type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: [], 
+                ...performanceOpts,
+                itemStyle: { color: barType === 'time' ? '#26a69a' : '#5470c6' } 
+            }
+        ]
     };
-    klineChart.setOption(option, true);
+    klineChart.setOption(option);
+}
+
+/**
+ * 将新数据追加到图表
+ * @param {Object} newChunk - 新分块数据 { dates, ohlc, volumes, ticks }
+ * @param {string} barType - bar类型
+ * @param {boolean} isFirstChunk - 是否是第一块数据
+ */
+function appendDataToChart(newChunk, barType, isFirstChunk) {
+    // ECharts 增量数据格式
+    // 注意：对于类目轴，X轴数据不能简单的 append，因为 ECharts 内部需要索引映射。
+    // 最稳妥的方式是更新整个 X 轴的 data，或者确保 appendData 的正确使用。
+    // 但对于几十万数据，频繁 setOption 全量 X 轴会有性能问题。
+    // 折中方案：X 轴数据整体更新（因为字符串数组引用传递很快），Y 轴数据增量追加。
+
+    const seriesData = barType === 'time' ? newChunk.volumes : newChunk.ticks;
+
+    const option = {
+        xAxis: [
+            // X轴必须全量更新，否则新数据无法映射到正确的位置
+            // 但因为我们使用了 min/max: 'dataMin'/'dataMax'，这会自动调整范围
+            { data: currentKlineData.dates },
+            { data: currentKlineData.dates }
+        ],
+        series: [
+            // K线数据增量追加
+            { data: currentKlineData.ohlc },
+            // 成交量/指标数据增量追加
+            { data: seriesData } 
+        ]
+    };
+
+    // 使用 notMerge: false (默认) 来合并数据
+    // 但这里有个技巧：如果直接传全量数据，其实不是增量渲染。
+    // ECharts 并没有完美的 "appendData" API 给类目轴使用。
+    // 在大数据模式下，直接 setOption 全量数据其实是经过优化的，只要开启了 large: true。
+    
+    if (isFirstChunk) {
+        // 第一块直接设置
+        klineChart.setOption(option);
+    } else {
+        // 后续块：为了防止界面闪烁，我们尽量保持缩放状态
+        // 获取当前缩放状态
+        const currentOption = klineChart.getOption();
+        // 保持当前的 start/end，防止自动跳转
+        // 但如果用户拉到了最右边，新数据来了应该自动跟进吗？
+        // 这里为了简单，直接 setOption，ECharts 内部会处理 diff
+        
+        // 只有当数据量非常大时，频繁 setOption 才会卡。
+        // 我们可以稍微节流一下，或者直接 set。
+        // 由于我们设置了 large: true，这里直接 setOption 全量数据通常是可接受的。
+        klineChart.setOption(option);
+    }
 }

@@ -45,17 +45,14 @@ class BaseSpider(abc.ABC):
             return
         # 收集所有 symbol
         symbols = [task['symbol'] for task in self.tasks]
-        # 转义单引号防止 SQL 注入（虽然符号来自内部，但保持规范）
-        escaped_symbols = [s.replace("'", "''") for s in symbols]
-        in_clause = "', '".join(escaped_symbols)
-        # 第一段查询：检查哪些 symbol 存在
-        sql_exist = f"""
+        in_clause = "', '".join(symbols)
+        sql = f"""
             SELECT DISTINCT symbol
             FROM {self.table_name}
             WHERE symbol IN ('{in_clause}')
         """
         try:
-            df = load_dataframe(sql_exist, db=self.market)
+            df = load_dataframe(sql, db=self.market)
             existing_symbols = set(df['symbol'].tolist()) if not df.empty else set()
         except Exception as e:
             error_msg = str(e)
@@ -71,16 +68,15 @@ class BaseSpider(abc.ABC):
         symbol_max_dates = {}
         if existing_symbols:
             # 针对已存在的 symbol 构建 IN 查询，一次性获取所有最大日期
-            exist_escaped = [s.replace("'", "''") for s in existing_symbols]
-            exist_in_clause = "', '".join(exist_escaped)
-            sql_dates = f"""
+            in_clause = "', '".join(existing_symbols)
+            sql = f"""
                 SELECT symbol, MAX(date) as date
                 FROM {self.table_name}
-                WHERE symbol IN ('{exist_in_clause}')
+                WHERE symbol IN ('{in_clause}')
                 GROUP BY symbol
             """
             try:
-                df_dates = load_dataframe(sql_dates, db=self.market)
+                df_dates = load_dataframe(sql, db=self.market)
                 if not df_dates.empty:
                     # 转换为字典映射 {symbol: max_date}
                     df_dates['date'] = pd.to_datetime(df_dates['date'])
