@@ -1,17 +1,13 @@
 // Dashboard Logic
-// 将 timer 挂载到 window 防止模块重新加载时丢失引用，或使用全局管理
 let dashboard_timer = null;
 
 function init_dashboard() {
-    // 立即更新一次
     updateStatus();
-    // 启动定时器
     if (dashboard_timer) clearInterval(dashboard_timer);
     dashboard_timer = setInterval(updateStatus, 5000);
 }
 
 function destroy_dashboard() {
-    // 视图切换时清理定时器，防止后台持续请求或内存泄漏
     if (dashboard_timer) {
         clearInterval(dashboard_timer);
         dashboard_timer = null;
@@ -20,9 +16,10 @@ function destroy_dashboard() {
 
 async function updateStatus() {
     try {
-        const data = await API.getStatus();
+        // 使用 WSAPI，useWS=false 保持原有 fetch 行为（fallback）
+        const data = await WSAPI.get('/status', {}, false);
         const grid = document.getElementById('status-grid');
-        if (!grid) return; // 如果已经切换页面，元素不存在则直接退出
+        if (!grid) return;
         
         grid.innerHTML = '';
         
@@ -34,7 +31,6 @@ async function updateStatus() {
         data.tasks.forEach(task => {
             const card = document.createElement('div');
             card.className = 'task-card';
-            // 修复：确保颜色类名正确
             const colorClass = `status-${task.color}`; 
             card.innerHTML = `
                 <div class="task-info">
