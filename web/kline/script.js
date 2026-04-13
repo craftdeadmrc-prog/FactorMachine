@@ -217,7 +217,6 @@ async function loadKline(symbol) {
     const rangeType = document.getElementById('kline-range').value;
     const adjSelect = document.getElementById('kline-adj');
     const adjType = adjSelect ? adjSelect.value : 'none';
-    
     const barType = document.getElementById('kline-bar-type').value;
     const thresholdInput = document.getElementById('kline-bar-threshold');
     const threshold = (barType !== 'time' && thresholdInput.value) ? parseFloat(thresholdInput.value) : null;
@@ -228,55 +227,37 @@ async function loadKline(symbol) {
         if(!klineChart) return;
     }
 
-    // 1. 重置状态
+    // 1. 重置状态 
     currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
     klineChart.clear();
-    
+
     // 初始化图表配置（空数据），设置大数优化参数
-    // 这样后续只需追加数据即可
     initEmptyChart(symbol, barType);
 
-    klineChart.showLoading('default', { 
-        text: '正在加载数据 (0%)...', 
-        color: '#c23531', 
-        textColor: '#fff', 
-        maskColor: 'rgba(0, 0, 0, 0.3)' 
-    });
+    // ✅ 已移除 klineChart.showLoading(...)
 
     let offset = 0;
-    const limit = 50000; // 每次请求 5 万条
+    const limit = 50000; 
     let total = 0;
     let hasMore = true;
 
     try {
         while (hasMore) {
             const params = new URLSearchParams({
-                market: market,
-                interval: interval,
-                symbol: symbol,
-                range_type: rangeType,
-                adj: adjType,
-                bar_type: barType,
-                offset: offset,
-                limit: limit
+                market: market, interval: interval, symbol: symbol,
+                range_type: rangeType, adj: adjType, bar_type: barType,
+                offset: offset, limit: limit
             });
             
-            if (threshold !== null) {
-                params.append('bar_threshold', threshold);
-            }
+            if (threshold !== null) params.append('bar_threshold', threshold);
 
-            // 2. 请求一个分块
             const response = await fetch(`/api/kline/data?${params.toString()}`);
             const result = await response.json();
             
-            if (result.detail) {
-                throw new Error(result.detail);
-            }
+            if (result.detail) throw new Error(result.detail);
 
             if (!result.data || result.data.length === 0) {
-                // 如果是第一页就没数据
                 if (offset === 0) {
-                    klineChart.hideLoading();
                     klineChart.setOption({ 
                         title: { text: '无数据', subtext: '数据库中未找到记录', left: 'center', top: 'center' } 
                     });
@@ -284,34 +265,26 @@ async function loadKline(symbol) {
                 break;
             }
 
-            // 3. 记录总数（用于进度计算）
-            if (total === 0 && result.total) {
-                total = result.total;
-            }
+            if (total === 0 && result.total) total = result.total;
 
-            // 4. 解析新数据
             const newChunk = parseKlineData(result.data);
 
-            // 5. 增量更新全局缓存
             currentKlineData.dates.push(...newChunk.dates);
             currentKlineData.ohlc.push(...newChunk.ohlc);
             currentKlineData.volumes.push(...newChunk.volumes);
             currentKlineData.ticks.push(...newChunk.ticks);
 
-            // 6. 增量渲染图表
             appendDataToChart(newChunk, barType, offset === 0);
 
-            // 7. 更新进度
+            // ✅ 已移除 hideLoading / showLoading 进度更新逻辑
+            // 如果需要保留进度提示但不遮挡图表，可改为 console.log 或更新页面上的独立状态栏
             const progress = total > 0 ? Math.round((currentKlineData.dates.length / total) * 100) : 50;
-            klineChart.hideLoading();
-            klineChart.showLoading('default', { text: `正在加载数据 (${progress}%)...` });
+            // console.log(`加载进度: ${progress}%`); 
 
-            // 8. 判断是否继续
             if (result.data.length < limit) {
                 hasMore = false;
             } else {
                 offset += limit;
-                // 安全限制：前端内存保护，防止浏览器崩溃
                 if (currentKlineData.dates.length >= 1500000) { 
                     console.warn("Reached client-side memory limit.");
                     hasMore = false;
@@ -319,14 +292,13 @@ async function loadKline(symbol) {
             }
         }
 
-        klineChart.hideLoading();
+        // ✅ 已移除 klineChart.hideLoading();
 
     } catch (e) {
-        console.error("Load kline failed", e);
+        console.error("Load kline failed ", e);
         alert("加载失败: " + e.message);
         if (klineChart) {
-            klineChart.hideLoading();
-            // 保持当前已加载的数据，仅显示错误提示
+            // ✅ 已移除 klineChart.hideLoading();
             if (currentKlineData.dates.length === 0) {
                 klineChart.clear();
                 klineChart.setOption({ 
@@ -336,7 +308,6 @@ async function loadKline(symbol) {
         }
     }
 }
-
 /**
  * 解析原始数据为图表所需格式
  */

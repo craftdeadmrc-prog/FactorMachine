@@ -90,19 +90,4 @@ const API = {
         const res = await fetch(`/api/logs/${taskName}`, { method: 'DELETE' });
         return await res.json();
     },
-    // Kline APIs
-    getKlineTables: async (market) => {
-        const res = await fetch(`/api/kline/tables/${market}`);
-        return await res.json();
-    },
-    // 修复：补充获取代码列表的方法
-    getKlineSymbols: async (market) => {
-        const res = await fetch(`/api/kline/symbols/${market}`);
-        return await res.json();
-    },
-    getKlineData: async (params) => {
-        const query = new URLSearchParams(params).toString();
-        const res = await fetch(`/api/kline/data?${query}`);
-        return await res.json();
-    }
 };
