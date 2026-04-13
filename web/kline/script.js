@@ -1,5 +1,5 @@
 // web/kline/script.js
-// Kline Logic
+// Kline Logic - Reverse chunk loading for time bars
 let klineChart = null;
 let allOverviewData = [];
 let renderedCount = 0;
@@ -13,6 +13,9 @@ let _renderTimer = null;
 let _renderQueue = [];
 const RENDER_DELAY = 80;
 const BATCH_SIZE = 3;
+
+// 全局数据缓存 - 只声明一次，避免重复声明错误
+let currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
 
 function init_kline() {
     const chartDom = document.getElementById('kline-chart-area');
@@ -38,8 +41,18 @@ function init_kline() {
 
 async function populateMarkets() {
     try {
-        const data = await WSAPI.get('/tasks', {}, false);
-        const markets = Object.keys(data).filter(k => k !== "System");
+        const data = await WSAPI.get('/tasks');
+        // 关键修复：严格过滤无效市场名，排除 unknown/empty/REQID 等
+        const markets = Object.keys(data).filter(k => {
+            return k && 
+                   typeof k === 'string' && 
+                   k.trim() && 
+                   k !== "System" && 
+                   k !== "unknown" && 
+                   k !== "REQID" && 
+                   !k.startsWith('_') &&
+                   k.toLowerCase() !== 'reqid';
+        });
         const select = document.getElementById('kline-market');
         if (!select) return;
         select.innerHTML = '<option>选择市场</option>';
@@ -78,10 +91,12 @@ async function onMarketChange() {
     if (!market) return;
     
     try {
-        const tables = await WSAPI.get('/kline/tables/' + encodeURIComponent(market), {}, false);
+        // 修复：使用查询参数，移除多余的 useWS 参数
+        const tables = await WSAPI.get('/kline/tables', { market: market });
         if (intervalSelect) {
             intervalSelect.innerHTML = '';
-            if (!tables || tables.length === 0) {
+            // 修复：确保 tables 是数组再遍历
+            if (!tables || !Array.isArray(tables) || tables.length === 0) {
                 intervalSelect.innerHTML = '<option>该市场无K线数据</option>';
                 return;
             }
@@ -96,8 +111,8 @@ async function onMarketChange() {
         if (symbolInput) symbolInput.disabled = false;
         if (loadBtn) loadBtn.disabled = false;
         
-        const symbols = await WSAPI.get('/kline/symbols/' + encodeURIComponent(market), {}, false);
-        if (symbolList && symbols && symbols.length > 0) {
+        const symbols = await WSAPI.get('/kline/symbols', { market: market });
+        if (symbolList && symbols && Array.isArray(symbols) && symbols.length > 0) {
             symbols.forEach(s => {
                 const opt = document.createElement('option');
                 opt.value = s;
@@ -126,8 +141,8 @@ async function loadOverview() {
     if (container) container.innerHTML = '加载中...';
     
     try {
-        const data = await WSAPI.get('/kline/overview', { market, interval }, false);
-        if (data && data.length > 0) {
+        const data = await WSAPI.get('/kline/overview', { market, interval });
+        if (data && Array.isArray(data) && data.length > 0) {
             allOverviewData = data;
             sortSymbols(currentSortKey, null, false);
         } else {
@@ -215,9 +230,6 @@ function onBarTypeChange() {
     }
 }
 
-// 全局数据缓存
-let currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
-
 async function loadKlineFromInput() {
     const input = document.getElementById('kline-symbol-manual');
     const symbol = input ? input.value.trim() : '';
@@ -250,11 +262,15 @@ async function loadKline(symbol) {
         if(!klineChart) return;
     }
 
-    // 重置状态 
+    // 关键修复：直接赋值，不要重复声明 let currentKlineData
     currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
     klineChart.clear();
     initEmptyChart(symbol, barType);
 
+    // 倒序加载策略：仅 time bar 支持倒序，特殊 bar 保持正序（因计算依赖连续性）
+    const isTimeBar = barType === 'time';
+    const sortOrder = isTimeBar ? 'desc' : 'asc';
+    
     let offset = 0;
     const limit = 50000; 
     let total = 0;
@@ -266,15 +282,15 @@ async function loadKline(symbol) {
             const params = {
                 market: market, interval: interval, symbol: symbol,
                 range_type: rangeType, adj: adjType, bar_type: barType,
-                offset: offset, limit: limit
+                offset: offset, limit: limit, sort_order: sortOrder
             };
             if (threshold !== null) params.bar_threshold = threshold;
 
-            const result = await WSAPI.get('/kline/data', params, false);
+            const result = await WSAPI.get('/kline/data', params);
             
             if (result.detail) throw new Error(result.detail);
 
-            if (!result.data || result.data.length === 0) {
+            if (!result.data || !Array.isArray(result.data) || result.data.length === 0) {
                 if (offset === 0) {
                     klineChart.setOption({ 
                         title: { text: '无数据', subtext: '数据库中未找到记录', left: 'center', top: 'center' } 
@@ -287,12 +303,28 @@ async function loadKline(symbol) {
 
             const newChunk = parseKlineData(result.data);
 
-            currentKlineData.dates.push(...newChunk.dates);
-            currentKlineData.ohlc.push(...newChunk.ohlc);
-            currentKlineData.volumes.push(...newChunk.volumes);
-            currentKlineData.ticks.push(...newChunk.ticks);
+            // 倒序加载时，后端返回的是降序数据，需要反转以便正确拼接
+            if (sortOrder === 'desc') {
+                newChunk.dates.reverse();
+                newChunk.ohlc.reverse();
+                newChunk.volumes.reverse();
+                newChunk.ticks.reverse();
+            }
 
-            _renderQueue.push({ chunk: newChunk, isFirst: offset === 0 });
+            // 倒序加载：新数据拼接到前面；正序加载：拼接到后面
+            if (sortOrder === 'desc') {
+                currentKlineData.dates = newChunk.dates.concat(currentKlineData.dates);
+                currentKlineData.ohlc = newChunk.ohlc.concat(currentKlineData.ohlc);
+                currentKlineData.volumes = newChunk.volumes.concat(currentKlineData.volumes);
+                currentKlineData.ticks = newChunk.ticks.concat(currentKlineData.ticks);
+            } else {
+                currentKlineData.dates.push(...newChunk.dates);
+                currentKlineData.ohlc.push(...newChunk.ohlc);
+                currentKlineData.volumes.push(...newChunk.volumes);
+                currentKlineData.ticks.push(...newChunk.ticks);
+            }
+
+            _renderQueue.push({ chunk: newChunk, isFirst: offset === 0, sortOrder: sortOrder });
 
             // 节流渲染
             if (_renderQueue.length >= BATCH_SIZE || !result.more) {
@@ -330,8 +362,8 @@ async function _flushRenderQueue() {
     return new Promise(resolve => {
         _renderTimer = setTimeout(() => {
             while (_renderQueue.length) {
-                const { chunk, isFirst } = _renderQueue.shift();
-                _appendDataSilent(chunk, document.getElementById('kline-bar-type')?.value || 'time', isFirst);
+                const { chunk, isFirst, sortOrder } = _renderQueue.shift();
+                _appendDataSilent(chunk, document.getElementById('kline-bar-type')?.value || 'time', isFirst, sortOrder);
             }
             _renderTimer = null;
             resolve();
@@ -339,8 +371,14 @@ async function _flushRenderQueue() {
     });
 }
 
-function _appendDataSilent(newChunk, barType, isFirstChunk) {
-    const seriesData = barType === 'time' ? newChunk.volumes : newChunk.ticks;
+function _appendDataSilent(newChunk, barType, isFirstChunk, sortOrder) {
+    const seriesData = barType === 'time' ? currentKlineData.volumes : currentKlineData.ticks;
+    
+    // 倒序加载时，如果是第一块（最新数据），设置 dataZoom 到末尾显示最新
+    const isDesc = sortOrder === 'desc';
+    const zoomStart = (isDesc && isFirstChunk) ? 0 : 80;
+    const zoomEnd = (isDesc && isFirstChunk) ? Math.min(20, 100 * 50000 / Math.max(currentKlineData.dates.length, 1)) : 100;
+    
     const option = {
         xAxis: [
             { data: currentKlineData.dates },
@@ -349,8 +387,13 @@ function _appendDataSilent(newChunk, barType, isFirstChunk) {
         series: [
             { data: currentKlineData.ohlc, silent: !isFirstChunk, animation: false },
             { data: seriesData, silent: !isFirstChunk, animation: false }
+        ],
+        dataZoom: [
+            { type: 'inside', xAxisIndex: [0, 1], start: zoomStart, end: zoomEnd },
+            { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: zoomStart, end: zoomEnd }
         ]
     };
+    // 关键：使用 lazyUpdate 和 notMerge:false 避免图表闪烁
     klineChart.setOption(option, { notMerge: false, lazyUpdate: true });
 }
 

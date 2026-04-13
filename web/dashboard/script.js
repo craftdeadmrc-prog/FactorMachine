@@ -1,5 +1,5 @@
 // web/dashboard/script.js
-// Dashboard Logic
+// Dashboard Logic - Pure WebSocket
 let dashboard_timer = null;
 
 function init_dashboard() {
@@ -17,8 +17,8 @@ function destroy_dashboard() {
 
 async function updateStatus() {
     try {
-        // 使用 WSAPI，useWS=false 保持原有 fetch 行为（fallback）
-        const data = await WSAPI.get('/status', {}, false);
+        // 纯WS传输，移除useWS参数
+        const data = await WSAPI.get('/status');
         const grid = document.getElementById('status-grid');
         if (!grid) return;
         

@@ -1,71 +1,8 @@
 // web/common/script.js
-// WebSocket Manager with optional gzip compression - Global scope version
-let currentViewName = null;
-
-// Initialization
-document.addEventListener('DOMContentLoaded', () => {
-    switchView('dashboard', document.querySelector('.nav-item'));
-});
-
-// Navigation Router
-async function switchView(viewName, navEl) {
-    if (currentViewName) {
-        const destroyFunc = window[`destroy_${currentViewName}`];
-        if (typeof destroyFunc === 'function') {
-            destroyFunc();
-        }
-    }
-
-    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-    if (navEl) navEl.classList.add('active');
-
-    const titles = {
-        'dashboard': '首页状态',
-        'tasks': '任务执行',
-        'logs': '日志查看',
-        'kline': 'K线查看'
-    };
-    document.getElementById('page-title').innerText = titles[viewName] || viewName;
-
-    const container = document.getElementById('view-container');
-    container.innerHTML = '<div style="padding:20px; color:#999;">Loading...</div>';
-
-    try {
-        const htmlPath = `/${viewName}/index.html`;
-        const res = await fetch(htmlPath);
-        if (res.ok) {
-            const html = await res.text();
-            container.innerHTML = html;
-            currentViewName = viewName;
-            loadPageScript(viewName);
-        } else {
-            container.innerHTML = `<div style="color:red;">页面未找到: ${htmlPath}</div>`;
-        }
-    } catch (e) {
-        console.error(e);
-        container.innerHTML = `<div style="color:red;">加载失败: ${e.message}</div>`;
-    }
-}
-
-function loadPageScript(viewName) {
-    const existingScript = document.getElementById(`script-${viewName}`);
-    if (existingScript) existingScript.remove();
-
-    const script = document.createElement('script');
-    script.src = `/${viewName}/script.js`;
-    script.id = `script-${viewName}`;
-    script.onload = () => {
-        const initFunc = window[`init_${viewName}`];
-        if (typeof initFunc === 'function') {
-            initFunc();
-        }
-    };
-    document.body.appendChild(script);
-}
+// WebSocket Manager - Pure WebSocket, NO HTTP fallback
 (function(global) {
     'use strict';
 
-    // WebSocket 客户端类
     function WSClient(url, options) {
         options = options || {};
         this.url = url;
@@ -96,7 +33,6 @@ function loadPageScript(viewName) {
 
         this.ws.onmessage = function(event) {
             var data = event.data;
-            // 自动解压 gzip（后端压缩时）
             if (self.compress && event.data instanceof ArrayBuffer) {
                 try {
                     var ds = new DecompressionStream('gzip');
@@ -184,7 +120,16 @@ function loadPageScript(viewName) {
                 }
             });
 
-            self.send('request', { reqId: reqId, endpoint: endpoint, params: params });
+            // 关键：只传递业务参数，过滤掉 reqId 等内部字段
+            var cleanParams = {};
+            if (params && typeof params === 'object') {
+                for (var key in params) {
+                    if (params.hasOwnProperty(key) && key !== 'reqId' && key !== '__method') {
+                        cleanParams[key] = params[key];
+                    }
+                }
+            }
+            self.send('request', { reqId: reqId, endpoint: endpoint, params: cleanParams });
             if (!self.ws || self.ws.readyState !== WebSocket.OPEN) {
                 self.connect();
             }
@@ -213,61 +158,93 @@ function loadPageScript(viewName) {
         if (this.ws) this.ws.close();
     };
 
-    // API 兼容层：优先 WS，失败 fallback 到 fetch
+    // API 层：纯 WebSocket 传输，禁止 HTTP fallback
     var WSAPI = {
-        get: function(endpoint, params, useWS) {
-            if (useWS === false) {
-                var qs = new URLSearchParams(params || {}).toString();
-                return fetch('/api' + endpoint + (qs ? '?' + qs : '')).then(function(r) { return r.json(); });
-            }
+        get: function(endpoint, params) {
             var qs = new URLSearchParams(params || {}).toString();
             var url = endpoint + (qs ? '?' + qs : '');
-            return (window.klineWS ? window.klineWS.request(url, params, { method: 'GET', timeout: 30000 }) : Promise.reject())
-                .catch(function() {
-                    return fetch('/api' + endpoint + (qs ? '?' + qs : '')).then(function(r) { return r.json(); });
-                });
+            return window.klineWS.request(url, params, { method: 'GET', timeout: 30000 });
         },
-        post: function(endpoint, body, useWS) {
-            if (useWS === false) {
-                return fetch('/api' + endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body || {})
-                }).then(function(r) { return r.json(); });
-            }
-            return (window.klineWS ? window.klineWS.request(endpoint, Object.assign({}, body, { __method: 'POST' }), { timeout: 30000 }) : Promise.reject())
-                .catch(function() {
-                    return fetch('/api' + endpoint, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body || {})
-                    }).then(function(r) { return r.json(); });
-                });
+        post: function(endpoint, body) {
+            return window.klineWS.request(endpoint, Object.assign({}, body, { __method: 'POST' }), { timeout: 30000 });
         },
-        delete: function(endpoint, useWS) {
-            if (useWS === false) {
-                return fetch('/api' + endpoint, { method: 'DELETE' }).then(function(r) { return r.json(); });
-            }
-            return (window.klineWS ? window.klineWS.request(endpoint, { __method: 'DELETE' }, { timeout: 30000 }) : Promise.reject())
-                .catch(function() {
-                    return fetch('/api' + endpoint, { method: 'DELETE' }).then(function(r) { return r.json(); });
-                });
+        delete: function(endpoint) {
+            return window.klineWS.request(endpoint, { __method: 'DELETE' }, { timeout: 30000 });
         }
     };
 
-    // 状态管理
     var State = {
         data: {},
         set: function(key, val) { this.data[key] = val; },
         get: function(key) { return this.data[key]; }
     };
 
-    // 全局挂载
     global.WSClient = WSClient;
     global.WSAPI = WSAPI;
     global.State = State;
     
-    // 创建单例（按需连接）
     global.klineWS = new WSClient('/ws/kline');
 
 })(typeof window !== 'undefined' ? window : this);
+
+// Navigation Router - Global scope
+let currentViewName = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    switchView('dashboard', document.querySelector('.nav-item'));
+});
+
+async function switchView(viewName, navEl) {
+    if (currentViewName) {
+        const destroyFunc = window[`destroy_${currentViewName}`];
+        if (typeof destroyFunc === 'function') {
+            destroyFunc();
+        }
+    }
+
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    if (navEl) navEl.classList.add('active');
+
+    const titles = {
+        'dashboard': '首页状态',
+        'tasks': '任务执行',
+        'logs': '日志查看',
+        'kline': 'K线查看'
+    };
+    document.getElementById('page-title').innerText = titles[viewName] || viewName;
+
+    const container = document.getElementById('view-container');
+    container.innerHTML = '<div style="padding:20px; color:#999;">Loading...</div>';
+
+    try {
+        const htmlPath = `/${viewName}/index.html`;
+        const res = await fetch(htmlPath);
+        if (res.ok) {
+            const html = await res.text();
+            container.innerHTML = html;
+            currentViewName = viewName;
+            loadPageScript(viewName);
+        } else {
+            container.innerHTML = `<div style="color:red;">页面未找到: ${htmlPath}</div>`;
+        }
+    } catch (e) {
+        console.error(e);
+        container.innerHTML = `<div style="color:red;">加载失败: ${e.message}</div>`;
+    }
+}
+
+function loadPageScript(viewName) {
+    const existingScript = document.getElementById(`script-${viewName}`);
+    if (existingScript) existingScript.remove();
+
+    const script = document.createElement('script');
+    script.src = `/${viewName}/script.js`;
+    script.id = `script-${viewName}`;
+    script.onload = () => {
+        const initFunc = window[`init_${viewName}`];
+        if (typeof initFunc === 'function') {
+            initFunc();
+        }
+    };
+    document.body.appendChild(script);
+}

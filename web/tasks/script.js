@@ -1,12 +1,16 @@
 // web/tasks/script.js
-// Tasks Logic
+// Tasks Logic - Pure WebSocket
+let selectedTaskNames = new Set();
+let currentTasks = {};
+
 function init_tasks() {
     loadTasks();
 }
 
 async function loadTasks() {
     try {
-        const data = await API.getTasks();
+        // 纯WS传输
+        const data = await WSAPI.get('/tasks');
         const container = document.getElementById('task-selection-list');
         const controls = container.querySelector('.list-controls');
         container.innerHTML = '';
@@ -14,6 +18,7 @@ async function loadTasks() {
         
         // 重置全局状态
         currentTasks = {}; 
+        selectedTaskNames.clear();
         
         const groupOrder = ["System", "ashare", "fund", "crypto"];
         const allGroups = Object.keys(data);
@@ -36,6 +41,9 @@ async function loadTasks() {
 
             const tasks = data[groupName];
             tasks.forEach(task => {
+                // 过滤无效任务
+                if (!task || !task.name || !task.name.trim()) return;
+                
                 currentTasks[task.name] = task; 
                 const item = document.createElement('div');
                 item.className = 'task-item';
@@ -72,7 +80,7 @@ function toggleSelection(taskName, itemElement) {
 function selectAllTasks() {
     document.querySelectorAll('.task-item').forEach(item => {
         const name = item.dataset.name;
-        if (!selectedTaskNames.has(name)) {
+        if (name && !selectedTaskNames.has(name)) {
             selectedTaskNames.add(name);
             item.classList.add('selected');
             item.querySelector('.task-item-icon').innerText = '●';
@@ -109,7 +117,7 @@ async function submitExecution() {
     };
 
     try {
-        const result = await API.runTasks(payload);
+        const result = await WSAPI.post('/run', payload);
         alert(result.message || JSON.stringify(result));
         // 切换首页
         switchView('dashboard', document.querySelector('.nav-item'));

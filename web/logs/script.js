@@ -1,17 +1,31 @@
 // web/logs/script.js
-// Logs Logic
+// Logs Logic - Pure WebSocket, filter undefined tasks
 function init_logs() {
     loadLogsList();
 }
 
 async function loadLogsList() {
     try {
-        const data = await WSAPI.get('/tasks', {}, false);
+        const data = await WSAPI.get('/tasks');
         const container = document.getElementById('log-list-container');
         container.innerHTML = '';
         
         const allTasks = [];
-        Object.values(data).forEach(arr => allTasks.push(...arr));
+        Object.values(data).forEach(arr => {
+            if (Array.isArray(arr)) {
+                // 关键修复：过滤掉 name 为 undefined/empty/unknown 的任务
+                arr.forEach(task => {
+                    if (task && 
+                        task.name && 
+                        typeof task.name === 'string' && 
+                        task.name.trim() && 
+                        task.name !== 'unknown' &&
+                        task.name !== 'REQID') {
+                        allTasks.push(task);
+                    }
+                });
+            }
+        });
         
         allTasks.forEach(task => {
             const item = document.createElement('div');
@@ -35,7 +49,7 @@ async function clearLogs(taskName) {
     if(!confirm(`确定要清理任务 [${taskName}] 的所有日志吗？此操作不可恢复。`)) return;
     
     try {
-        const data = await WSAPI.delete('/logs/' + encodeURIComponent(taskName), false);
+        const data = await WSAPI.delete('/logs/' + encodeURIComponent(taskName));
         alert('日志清理成功');
         const detail = document.getElementById('log-detail-view');
         if (detail) {
@@ -53,8 +67,8 @@ async function loadLogDetail(taskName, itemElement) {
     detail.classList.add('open');
     detail.innerText = 'Loading...';
     try {
-        const data = await WSAPI.get('/logs/' + encodeURIComponent(taskName), {}, false);
-        if (data.logs && data.logs.length > 0) {
+        const data = await WSAPI.get('/logs/' + encodeURIComponent(taskName));
+        if (data.logs && Array.isArray(data.logs) && data.logs.length > 0) {
             const text = data.logs.map(log => 
                 `[${log.date}] [${log.level}] ${log.message}`
             ).reverse().join('\n');

@@ -1,4 +1,3 @@
-# web/app.py
 import asyncio
 import logging
 import os
@@ -8,17 +7,17 @@ import math
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from itertools import groupby
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 import pandas as pd
 import numpy as np
 from threading import Lock
 import time
+import json
 
 # 添加项目根目录到路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
-
 from web import task_handler
 from web import log_handler
 from core.storage import load_dataframe
@@ -53,7 +52,7 @@ class KlineCache:
         self.cache = {}
         self.lock = Lock()
         self.max_size = max_size
-        self.ttl = ttl # seconds
+        self.ttl = ttl
 
     def _key(self, market, symbol, interval, adj, start, end):
         return f"{market}_{symbol}_{interval}_{adj}_{start}_{end}"
@@ -72,7 +71,6 @@ class KlineCache:
     def set(self, market, symbol, interval, adj, start, end, data):
         key = self._key(market, symbol, interval, adj, start, end)
         with self.lock:
-            # 简单的 LRU：如果满了，删掉最旧的一个
             if len(self.cache) >= self.max_size:
                 oldest_key = next(iter(self.cache))
                 del self.cache[oldest_key]
@@ -92,11 +90,10 @@ def clean_nan(data):
         return None
     else:
         return data
- 
+
 # ----------------------
-# 路由：API 接口
+# 路由：任务与状态接口
 # ----------------------
- 
 @app.get("/api/tasks")
 def get_all_tasks():
     tasks = task_handler.scheduler.get_all_tasks()
@@ -107,7 +104,7 @@ def get_all_tasks():
             "type": t.type
         })
         for t in tasks
-        if log_handler.get_db_identifier(t.name, task_handler.scheduler) != "unknown"
+        if log_handler.get_db_identifier(t.name, task_handler.scheduler) not in ("unknown", "system", "", None)
     ]
     valid_tasks_with_ids.sort(key=lambda x: x[0])
     grouped_tasks = {
@@ -119,45 +116,51 @@ def get_all_tasks():
         **grouped_tasks
     }
     return grouped
- 
+
 @app.get("/api/status")
 def get_status():
     return task_handler.get_status_info()
- 
+
 @app.post("/api/run")
 async def run_tasks(payload: Dict[str, Any] = Body(...)):
-    # 保持原有逻辑不变
     task_names = payload.get("task_names", [])
-    symbols = payload.get("symbols") 
+    symbols = payload.get("symbols")
     start_date = payload.get("start_date")
     end_date = payload.get("end_date")
     update = payload.get("update", False)
+    
     if not task_names:
         raise HTTPException(status_code=400, detail="未选择任何任务")
+    
     has_init = "Init" in task_names
     other_tasks = [t for t in task_names if t != "Init"]
+    
     if has_init:
         logger.info("Running Init task...")
         asyncio.create_task(task_handler.run_init_task(update=True))
-    if not other_tasks:
-        return {"message": "Init task submitted."}
-    loop = asyncio.get_running_loop() 
+        if not other_tasks:
+            return {"message": "Init task submitted."}
+    
+    loop = asyncio.get_running_loop()
     tasks_with_ids = [
-        (log_handler.get_db_identifier(t, task_handler.scheduler), t) 
+        (log_handler.get_db_identifier(t, task_handler.scheduler), t)
         for t in other_tasks
     ]
     valid_tasks = sorted(
-        [(db_id, t) for db_id, t in tasks_with_ids if db_id != "unknown"],
+        [(db_id, t) for db_id, t in tasks_with_ids if db_id not in ("unknown", "system", "", None)],
         key=lambda x: x[0]
     )
     tasks_by_market = {
         db_id: [item[1] for item in group]
         for db_id, group in groupby(valid_tasks, key=lambda x: x[0])
     }
+    
     if not tasks_by_market:
         raise HTTPException(status_code=400, detail="无法识别任务的市场类型")
+    
     submission_count = 0
     default_end_date = pd.Timestamp.now().date()
+    
     for db_id, market_task_names in tasks_by_market.items():
         try:
             if not symbols:
@@ -179,40 +182,46 @@ async def run_tasks(payload: Dict[str, Any] = Body(...)):
             submission_count += len(submitted)
         except Exception as e:
             logger.error(f"Failed to process tasks for market {db_id}: {e}")
+    
     return {"message": f"Tasks submitted. Total groups processed: {len(tasks_by_market)}."}
- 
- 
+
 @app.delete("/api/logs/{task_name}")
 def clear_task_logs(task_name: str):
     return log_handler.clear_task_logs(task_name, task_handler.scheduler)
- 
+
 @app.get("/api/logs/{task_name}")
 def get_task_logs(task_name: str):
     return log_handler.get_task_logs(task_name, task_handler.scheduler)
- 
+
 # ----------------------
-# K线接口
+# K线接口 - 修复：使用查询参数
 # ----------------------
- 
-@app.get("/api/kline/symbols/{market}")
+@app.get("/api/kline/symbols")
 async def get_kline_symbols(market: str):
+    if not market:
+        return []
     sql = "SELECT DISTINCT symbol FROM symbols ORDER BY symbol"
     loop = asyncio.get_running_loop()
     try:
         df = await loop.run_in_executor(None, load_dataframe, sql, market)
-        if df.empty: return []
+        if df.empty:
+            return []
         return df['symbol'].tolist()
     except Exception as e:
         logger.error(f"Failed to get symbols: {e}")
         return []
- 
-@app.get("/api/kline/tables/{market}")
+
+@app.get("/api/kline/tables")
 async def get_kline_tables(market: str):
+    """修复：使用查询参数 ?market=xxx 而非路径参数"""
+    if not market:
+        return []
     sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' AND table_name LIKE 'kline_%'"
     loop = asyncio.get_running_loop()
     try:
         df = await loop.run_in_executor(None, load_dataframe, sql, market)
-        if df.empty: return []
+        if df.empty:
+            return []
         tables = []
         pattern = re.compile(r"^kline_(.+)$")
         for _, row in df.iterrows():
@@ -223,41 +232,38 @@ async def get_kline_tables(market: str):
     except Exception as e:
         logger.error(f"Failed to get kline tables: {e}")
         return []
- 
+
 @app.get("/api/kline/overview")
 async def get_kline_overview(market: str, interval: str):
+    if not market or not interval:
+        return []
     table_name = f"kline_{interval}"
     loop = asyncio.get_running_loop()
- 
-    # 1. 检查表是否存在及数据量
+    
     try:
-        check_sql = f"SELECT COUNT(*) as cnt FROM \"{table_name}\""
+        check_sql = f'SELECT COUNT(*) as cnt FROM "{table_name}"'
         cnt_df = await loop.run_in_executor(None, load_dataframe, check_sql, market)
         total_rows = int(cnt_df.iloc[0, 0]) if not cnt_df.empty else 0
     except Exception:
-        # 表不存在
         total_rows = 0
- 
-    # 获取基础代码列表
+
     try:
         symbols_sql = "SELECT symbol, short_name FROM symbols"
         df_symbols = await loop.run_in_executor(None, load_dataframe, symbols_sql, market)
-        if df_symbols.empty: return []
+        if df_symbols.empty:
+            return []
         base_data = df_symbols.to_dict('records')
     except Exception as e:
         logger.error(f"Failed to load symbols: {e}")
         return []
- 
-    # 阈值判断：超过1亿条不计算价格
+
     LARGE_TABLE_THRESHOLD = 100_000_000
     if total_rows > LARGE_TABLE_THRESHOLD:
         logger.info(f"Large table {table_name}, skipping price calculation.")
         return clean_nan([{**item, 'close': None, 'pct_change': None} for item in base_data])
- 
-    # 2. 小表：查询价格并计算
+
     try:
-        # 使用 LATERAL JOIN 获取最近两条
-        data_sql = f"""
+        data_sql = f'''
             SELECT s.symbol, s.short_name, k.close, k.date
             FROM symbols s
             LEFT JOIN LATERAL (
@@ -266,15 +272,15 @@ async def get_kline_overview(market: str, interval: str):
                 ORDER BY date DESC LIMIT 2
             ) k ON true
             ORDER BY s.symbol, k.date DESC
-        """
+        '''
         df_raw = await loop.run_in_executor(None, load_dataframe, data_sql, market)
         if df_raw.empty:
             return clean_nan([{**item, 'close': None, 'pct_change': None} for item in base_data])
- 
+
         results = []
         for sym, group in df_raw.groupby('symbol'):
             group = group.sort_values('date', ascending=False)
-            closes = group['close'].values
+            closes = group['close'].values 
             
             item = {
                 'symbol': sym,
@@ -284,12 +290,8 @@ async def get_kline_overview(market: str, interval: str):
             }
             
             if len(closes) >= 2:
-                # 向量化计算
-                # 注意顺序：group是降序，closes[0]是新，closes[1]是旧
-                # ROC 需要 [旧, 新]
                 if talib:
                     roc = talib.ROC(closes[::-1], timeperiod=1)
-                    # ROC[1] 是变化率
                     if len(roc) > 1 and not np.isnan(roc[1]):
                         item['pct_change'] = round(float(roc[1]), 2)
                 else:
@@ -298,91 +300,84 @@ async def get_kline_overview(market: str, interval: str):
             
             results.append(item)
         
-        # 关键：清洗 NaN
         return clean_nan(results)
- 
+
     except Exception as e:
         logger.error(f"Overview error: {e}")
         return clean_nan([{**item, 'close': None, 'pct_change': None} for item in base_data])
- 
-@app.get("/api/kline/data") 
-async def get_kline_data( 
-    market: str, 
-    interval: str, 
-    symbol: str, 
+
+@app.get("/api/kline/data")
+async def get_kline_data(
+    market: str,
+    interval: str,
+    symbol: str,
     range_type: str = "1m",
-    start_date: Optional[str] = None, 
+    start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     adj: str = "none",
     bar_type: str = "time",
     bar_threshold: Optional[float] = None,
-    offset: int = 0,      # 新增：分页偏移
-    limit: int = 50000    # 新增：每块大小，默认 5 万条
- ):
+    offset: int = 0,
+    limit: int = 50000,
+    sort_order: str = "asc"
+):
     if not re.match(r'^[a-zA-Z0-9_]+$', interval):
         raise HTTPException(status_code=400, detail="Invalid interval format")
-    
     table_name = f"kline_{interval}"
-    
+
     now = datetime.now()
     end_dt = pd.to_datetime(end_date) if end_date else now
-    
-    # 解析时间范围
+
     if start_date:
         start_dt = pd.to_datetime(start_date)
     else:
-        if range_type == '1w': start_dt = end_dt - timedelta(weeks=1)
-        elif range_type == '1m': start_dt = end_dt - timedelta(days=30)
-        elif range_type == '1y': start_dt = end_dt - timedelta(days=365)
-        elif range_type == 'all': start_dt = None
-        else: start_dt = end_dt - timedelta(days=365)
+        if range_type == '1w':
+            start_dt = end_dt - timedelta(weeks=1)
+        elif range_type == '1m':
+            start_dt = end_dt - timedelta(days=30)
+        elif range_type == '1y':
+            start_dt = end_dt - timedelta(days=365)
+        elif range_type == 'all':
+            start_dt = None
+        else:
+            start_dt = end_dt - timedelta(days=365)
 
-    # 缓存键
     cache_key_params = (market, symbol, interval, adj, str(start_dt), str(end_dt))
-    
+
     loop = asyncio.get_running_loop()
-    
-    # 检查是否需要复权，如果需要复权，我们优先使用缓存
     df_full = None
-    
+
     if adj in ['qfq', 'hfq']:
         df_full = kline_cache.get(*cache_key_params)
-    
-    # 如果没有缓存或者不复权，则查询数据库
+
     if df_full is None:
-        # 构建 SQL
-        sql = f"""
+        sql = f'''
             SELECT 
                 date, open, close, volume, high, low
             FROM "{table_name}" 
             WHERE symbol = '{symbol}'
-        """
+        '''
         
         if start_dt:
             sql += f" AND date >= '{start_dt.strftime('%Y-%m-%d')}'"
         if end_date:
             sql += f" AND date <= '{end_dt.strftime('%Y-%m-%d')}'"
         
-        # 仅在不复权且需要分页时，直接在 SQL 层面分页，效率最高
-        # 如果需要复权，必须先拉取全量数据计算
+        order_dir = "ASC" if sort_order != "desc" else "DESC"
+        
         if adj == 'none':
-            # 获取总数
             count_sql = f"SELECT COUNT(*) as cnt FROM ({sql})"
             cnt_df = await loop.run_in_executor(None, load_dataframe, count_sql, market)
             total_count = int(cnt_df.iloc[0, 0]) if not cnt_df.empty else 0
             
-            # 追加分页
-            # DuckDB 使用 LIMIT OFFSET
-            paginated_sql = f"{sql} ORDER BY date LIMIT {limit} OFFSET {offset}"
+            paginated_sql = f"{sql} ORDER BY date {order_dir} LIMIT {limit} OFFSET {offset}"
             df = await loop.run_in_executor(None, load_dataframe, paginated_sql, market)
         else:
-            # 复权逻辑：拉取全量 -> 计算 -> 存入缓存 -> 后续逻辑切片
             df = await loop.run_in_executor(None, load_dataframe, sql, market)
             
             if not df.empty:
-                df = df.sort_values('date').reset_index(drop=True)
+                df = df.sort_values('date').reset_index(drop=True) 
                 try:
-                    # 尝试获取复权因子
                     check_sql = "SELECT table_name FROM information_schema.tables WHERE table_name = 'adjust_factor'"
                     table_check = await loop.run_in_executor(None, load_dataframe, check_sql, market)
                     if not table_check.empty:
@@ -396,37 +391,26 @@ async def get_kline_data(
                 except Exception as e:
                     logger.warning(f"FQ error ({adj}): {e}")
                 
-                # 存入缓存
                 kline_cache.set(*cache_key_params, df)
-                df_full = df # 指向全量数据
+                df_full = df
 
-    # 数据处理逻辑
     if df_full is not None:
-        # 如果是复权数据（全量在内存中），手动切片
         total_count = len(df_full)
-        # 这里注意：offset/limit 是基于查询结果的
         df = df_full.iloc[offset: offset + limit].copy()
     elif adj != 'none':
-        # 如果复权但 df_full 为空（之前查询失败）
         total_count = 0
         df = pd.DataFrame()
     else:
-        # 不复权的情况，df 和 total_count 已经在上面 SQL 查询时处理了
         pass
 
     if df.empty:
         if offset == 0:
-            return {"data": [], "total": 0}
+            return {"data": [], "total": 0, "offset": offset, "limit": limit, "sort_order": sort_order}
         else:
-            return {"data": [], "total": total_count} # 后续请求为空直接返回
+            return {"data": [], "total": total_count, "offset": offset, "limit": limit, "sort_order": sort_order}
 
     df = df.sort_values('date').reset_index(drop=True)
-    
-    # --- Bar 转换逻辑 ---
-    # 注意：如果数据量极大，Bar转换在前端做可能更好，或者后端对当前切片做转换
-    # 这里为了保持一致性，对当前切片进行 Bar 转换。
-    # 但对于 Volume/Cusum Bar，切片转换可能会导致边界处的 Bar 定义不准确。
-    # 建议：如果用户选择了非 Time Bar，提示用户数据范围不宜过大，或者接受切片边界误差。
+
     if bar_type != 'time':
         try:
             df = bars.generate_bars(df, bar_type=bar_type, threshold=bar_threshold)
@@ -435,28 +419,125 @@ async def get_kline_data(
 
     if 'date' in df.columns:
         df['date'] = df['date'].astype(str)
-    
+
     records = df.to_dict(orient="records")
-    
+
     return {
         "data": clean_nan(records),
         "total": total_count,
         "offset": offset,
-        "limit": limit
+        "limit": limit,
+        "sort_order": sort_order
     }
 
- 
+# ----------------------
+# WebSocket 端点 - 纯传输通道
+# ----------------------
+@app.websocket("/ws/kline")
+async def kline_websocket(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                msg_type = msg.get('type')
+                
+                if msg_type == 'request':
+                    req_id = msg.get('reqId')
+                    endpoint = msg.get('endpoint')
+                    params = msg.get('params', {})
+                    
+                    # 关键修复：确保params是dict，避免'list' object is not a mapping
+                    if not isinstance(params, dict):
+                        params = {}
+                    
+                    loop = asyncio.get_running_loop()
+                    
+                    if endpoint == '/kline/data':
+                        result = await get_kline_data(
+                            market=params.get('market'),
+                            interval=params.get('interval'),
+                            symbol=params.get('symbol'),
+                            range_type=params.get('range_type', '1m'),
+                            start_date=params.get('start_date'),
+                            end_date=params.get('end_date'),
+                            adj=params.get('adj', 'none'),
+                            bar_type=params.get('bar_type', 'time'),
+                            bar_threshold=params.get('bar_threshold'),
+                            offset=int(params.get('offset', 0)) if params.get('offset') is not None else 0,
+                            limit=int(params.get('limit', 50000)) if params.get('limit') is not None else 50000,
+                            sort_order=params.get('sort_order', 'asc')
+                        )
+                        await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
+                        
+                    elif endpoint == '/kline/overview':
+                        result = await get_kline_overview(
+                            market=params.get('market'),
+                            interval=params.get('interval')
+                        )
+                        await websocket.send_text(json.dumps({'reqId': req_id, 'data': result}, default=str))
+                        
+                    elif endpoint == '/kline/symbols':
+                        market = params.get('market')
+                        if market:
+                            result = await get_kline_symbols(market)
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'data': result}, default=str))
+                        else:
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'error': 'market parameter required'}, default=str))
+                            
+                    elif endpoint == '/kline/tables':
+                        market = params.get('market')
+                        if market:
+                            result = await get_kline_tables(market)
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'data': result}, default=str))
+                        else:
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'error': 'market parameter required'}, default=str))
+                            
+                    elif endpoint == '/status':
+                        result = get_status()
+                        await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
+                        
+                    elif endpoint == '/tasks':
+                        result = get_all_tasks()
+                        await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
+                        
+                    elif endpoint.startswith('/logs/'):
+                        task_name = endpoint.split('/')[-1]
+                        if task_name:
+                            result = log_handler.get_task_logs(task_name, task_handler.scheduler)
+                            await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
+                        else:
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'error': 'task_name required'}, default=str))
+                            
+                    else:
+                        await websocket.send_text(json.dumps({'reqId': req_id, 'error': f'Unknown endpoint: {endpoint}'}, default=str))
+                
+                elif msg_type == 'ping':
+                    await websocket.send_text(json.dumps({'type': 'pong'}))
+                    
+            except json.JSONDecodeError as e:
+                logger.error(f"WS JSON decode error: {e}")
+                await websocket.send_text(json.dumps({'error': 'Invalid JSON format'}))
+            except Exception as e:
+                logger.error(f"WS handler error: {e}", exc_info=True)
+                await websocket.send_text(json.dumps({'error': str(e)}))
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected")
+    except Exception as e:
+        logger.error(f"WS connection error: {e}", exc_info=True)
+
 # ----------------------
 # 静态文件与生命周期
 # ----------------------
 app.mount("/", StaticFiles(directory=current_dir, html=True), name="web")
- 
+
 @app.on_event("startup")
 async def startup_event():
     logger.info("Web panel startup. Running init...")
     asyncio.create_task(task_handler.run_init_task(update=False))
     task_handler.start_background_scheduler()
- 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     task_handler.bg_scheduler.shutdown()
