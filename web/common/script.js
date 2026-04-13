@@ -1,6 +1,67 @@
 // web/common/script.js
 // WebSocket Manager with optional gzip compression - Global scope version
+let currentViewName = null;
 
+// Initialization
+document.addEventListener('DOMContentLoaded', () => {
+    switchView('dashboard', document.querySelector('.nav-item'));
+});
+
+// Navigation Router
+async function switchView(viewName, navEl) {
+    if (currentViewName) {
+        const destroyFunc = window[`destroy_${currentViewName}`];
+        if (typeof destroyFunc === 'function') {
+            destroyFunc();
+        }
+    }
+
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    if (navEl) navEl.classList.add('active');
+
+    const titles = {
+        'dashboard': '首页状态',
+        'tasks': '任务执行',
+        'logs': '日志查看',
+        'kline': 'K线查看'
+    };
+    document.getElementById('page-title').innerText = titles[viewName] || viewName;
+
+    const container = document.getElementById('view-container');
+    container.innerHTML = '<div style="padding:20px; color:#999;">Loading...</div>';
+
+    try {
+        const htmlPath = `/${viewName}/index.html`;
+        const res = await fetch(htmlPath);
+        if (res.ok) {
+            const html = await res.text();
+            container.innerHTML = html;
+            currentViewName = viewName;
+            loadPageScript(viewName);
+        } else {
+            container.innerHTML = `<div style="color:red;">页面未找到: ${htmlPath}</div>`;
+        }
+    } catch (e) {
+        console.error(e);
+        container.innerHTML = `<div style="color:red;">加载失败: ${e.message}</div>`;
+    }
+}
+
+function loadPageScript(viewName) {
+    const existingScript = document.getElementById(`script-${viewName}`);
+    if (existingScript) existingScript.remove();
+
+    const script = document.createElement('script');
+    script.src = `/${viewName}/script.js`;
+    script.id = `script-${viewName}`;
+    script.onload = () => {
+        const initFunc = window[`init_${viewName}`];
+        if (typeof initFunc === 'function') {
+            initFunc();
+        }
+    };
+    document.body.appendChild(script);
+}
 (function(global) {
     'use strict';
 
