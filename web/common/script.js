@@ -1,4 +1,4 @@
-// common/script.js
+// web/common/script.js
 // WebSocket Manager with optional gzip compression - Global scope version
 
 (function(global) {

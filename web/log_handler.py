@@ -1,3 +1,4 @@
+# web/log_handler.py
 import os
 import duckdb
 import logging

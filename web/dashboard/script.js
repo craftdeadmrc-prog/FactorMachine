@@ -1,3 +1,4 @@
+// web/dashboard/script.js
 // Dashboard Logic
 let dashboard_timer = null;
 

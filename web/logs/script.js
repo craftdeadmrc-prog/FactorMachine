@@ -1,3 +1,4 @@
+// web/logs/script.js
 // Logs Logic
 function init_logs() {
     loadLogsList();
