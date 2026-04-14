@@ -123,7 +123,7 @@
                 if (res.error) {
                     reject(new Error(res.error));
                 } else {
-                    // 关键修复：如果响应只有 data 字段，直接返回 data（解包）
+                    // 解包：如果响应只有 data 字段，直接返回 data
                     if (res.data !== undefined && Object.keys(res).length === 1) {
                         resolve(res.data);
                     } else {
@@ -153,7 +153,8 @@
         this._stopHeartbeat();
         this.heartTimer = setInterval(function() {
             if (self.ws && self.ws.readyState === WebSocket.OPEN) {
-                self.ws.send('ping');
+                // 发送 JSON 格式的 ping，避免后端 json.loads 失败
+                self.ws.send(JSON.stringify({type: 'ping'}));
             }
         }, this.heartbeat);
     };

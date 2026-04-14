@@ -256,16 +256,16 @@ async function loadKline(symbol) {
         if(!klineChart) return;
     }
 
-    // 关键修复：直接赋值，不要重复声明
     currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
     klineChart.clear();
     initEmptyChart(symbol, barType);
 
-    // 加载策略：time bar 倒序分页（先加载最新块），特殊 bar 正序分页（从最早计算）
+    // === 关键修复1：非time bar禁用分页 ===
     const isTimeBar = barType === 'time';
+    const disablePagination = !isTimeBar;  // 特殊bar不分页
     
     let offset = 0;
-    const limit = 50000; 
+    const limit = disablePagination ? 200000 : 50000;  // 特殊bar一次性加载20万条
     let total = 0;
     let loadedCount = 0;
     let hasMore = true;
@@ -274,25 +274,23 @@ async function loadKline(symbol) {
 
     try {
         while (hasMore) {
-            // === 关键修复1：计算分页 offset ===
+            // === 计算分页 offset ===
             if (isTimeBar) {
                 if (isFirstRequest) {
-                    // 第一请求：offset=0 获取 total
-                    offset = 0;
+                    offset = 0;  // 第一请求获取 total
                 } else {
-                    // 后续请求：从最新往最早加载
-                    // offset = total - 已加载数 - 当前块大小
+                    // 倒序：从最新往最早加载
                     offset = Math.max(0, total - loadedCount - limit);
                 }
             } else {
-                // 特殊 bar：正序加载，从最早开始计算
-                offset = loadedCount;
+                // 特殊 bar：正序加载，从最早开始（但禁用分页，只请求一次）
+                offset = 0;
             }
             
             const params = {
                 market: market, interval: interval, symbol: symbol,
                 range_type: rangeType, adj: adjType, bar_type: barType,
-                offset: offset, limit: limit, sort_order: 'asc'  // 始终正序查询
+                offset: offset, limit: limit
             };
             if (threshold !== null) params.bar_threshold = threshold;
 
@@ -310,15 +308,13 @@ async function loadKline(symbol) {
                 break;
             }
 
-            // === 关键修复2：第一请求后获取 total，time bar 重新定位到最新块 ===
+            // === 第一请求后获取 total，time bar 重定向到最新块 ===
             if (total === 0 && result.total) {
                 total = result.total;
                 
                 if (isTimeBar && isFirstRequest && total > limit) {
-                    // 计算最新块的 offset
                     const correctOffset = total - limit;
                     if (correctOffset > 0 && correctOffset !== offset) {
-                        // 重新请求正确的最新块
                         params.offset = correctOffset;
                         const newResult = await WSAPI.get('/kline/data', params);
                         if (newResult.data && newResult.data.length > 0) {
@@ -333,9 +329,8 @@ async function loadKline(symbol) {
             isFirstRequest = false;
 
             const newChunk = parseKlineData(result.data);
-            // SQL 正序查询，块内已是 [旧→新]，不需要 reverse（保持用户注释掉的逻辑）
 
-            // === 关键修复3：拼接方向 ===
+            // === 拼接方向 ===
             if (loadedCount === 0) {
                 // 第一块：直接赋值
                 currentKlineData.dates = [...newChunk.dates];
@@ -343,14 +338,13 @@ async function loadKline(symbol) {
                 currentKlineData.volumes = [...newChunk.volumes];
                 currentKlineData.ticks = [...newChunk.ticks];
             } else if (isTimeBar) {
-                // time bar 后续块：新块是更早的数据，拼接到前面
-                // [更早数据] + [已有数据] = [最旧...最新] ✓
+                // time bar：新块是更早的数据，拼接到前面
                 currentKlineData.dates = newChunk.dates.concat(currentKlineData.dates);
                 currentKlineData.ohlc = newChunk.ohlc.concat(currentKlineData.ohlc);
                 currentKlineData.volumes = newChunk.volumes.concat(currentKlineData.volumes);
                 currentKlineData.ticks = newChunk.ticks.concat(currentKlineData.ticks);
             } else {
-                // 特殊 bar：新块是更晚的数据，拼接到后面（保持用户注释掉的 push 逻辑）
+                // 特殊 bar：拼接到后面（保持用户注释逻辑）
                 currentKlineData.dates.push(...newChunk.dates);
                 currentKlineData.ohlc.push(...newChunk.ohlc);
                 currentKlineData.volumes.push(...newChunk.volumes);
@@ -365,15 +359,18 @@ async function loadKline(symbol) {
                 await _flushRenderQueue();
             }
 
-            // === 关键修复4：判断是否还有更多数据 ===
-            if (isTimeBar) {
+            // === 关键修复2：hasMore 判断 ===
+            if (disablePagination) {
+                // 特殊 bar：只加载一次
+                hasMore = false;
+            } else if (isTimeBar) {
                 // time bar: offset=0 或数据不足表示已加载完
                 if (offset <= 0 || result.data.length < limit) {
                     hasMore = false;
                 }
             } else {
-                // 特殊 bar: 数据不足表示已加载完
-                if (result.data.length < limit) {
+                // 备用逻辑（理论上不会执行）
+                if (result.more === false || result.data.length < limit) {
                     hasMore = false;
                 }
             }
@@ -411,17 +408,36 @@ async function _flushRenderQueue() {
 function _appendDataSilent(newChunk, barType, isFirstChunk) {
     const seriesData = barType === 'time' ? currentKlineData.volumes : currentKlineData.ticks;
     
-    // === 关键修复5：dataZoom 始终聚焦右侧（显示最新数据）===
-    // 无论加载顺序如何，currentKlineData 始终是 [最旧...最新]
-    // dataZoom 默认显示最后 20%，让用户第一眼看到最新数据
     const totalPoints = currentKlineData.dates.length;
-    const zoomStart = totalPoints <= 50000 ? 0 : 80;  // 数据少时显示全部
+    const zoomStart = totalPoints <= 50000 ? 0 : 80;
     const zoomEnd = 100;
     
     const option = {
         xAxis: [
-            { data: currentKlineData.dates },
-            { data: currentKlineData.dates }
+            // === 关键修复3：主坐标轴显示label ===
+            { 
+                type: 'category', 
+                data: currentKlineData.dates, 
+                boundaryGap: false, 
+                axisLine: { onZero: false }, 
+                splitLine: { show: false }, 
+                min: 'dataMin', 
+                max: 'dataMax',
+                axisLabel: { show: true }  // 主坐标轴显示日期
+            },
+            // === 关键修复3：副坐标轴隐藏label，避免重复 ===
+            { 
+                type: 'category', 
+                gridIndex: 1, 
+                data: currentKlineData.dates, 
+                boundaryGap: false, 
+                axisLine: { onZero: false }, 
+                axisTick: { show: false }, 
+                splitLine: { show: false }, 
+                axisLabel: { show: false },  // 副坐标轴隐藏日期（关键！）
+                min: 'dataMin', 
+                max: 'dataMax' 
+            }
         ],
         series: [
             { data: currentKlineData.ohlc, silent: !isFirstChunk, animation: false },
@@ -432,7 +448,6 @@ function _appendDataSilent(newChunk, barType, isFirstChunk) {
             { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: zoomStart, end: zoomEnd }
         ]
     };
-    // 关键：使用 lazyUpdate 和 notMerge:false 避免图表闪烁
     klineChart.setOption(option, { notMerge: false, lazyUpdate: true });
 }
 
@@ -474,8 +489,30 @@ function initEmptyChart(symbol, barType) {
             { left: '10%', right: '8%', top: '70%', height: '15%' }
         ],
         xAxis: [
-            { type: 'category', data: [], boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' },
-            { type: 'category', gridIndex: 1, data: [], boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' }
+            // 主坐标轴：显示日期
+            { 
+                type: 'category', 
+                data: [], 
+                boundaryGap: false, 
+                axisLine: { onZero: false }, 
+                splitLine: { show: false }, 
+                min: 'dataMin', 
+                max: 'dataMax',
+                axisLabel: { show: true }
+            },
+            // 副坐标轴：隐藏日期，避免重复
+            { 
+                type: 'category', 
+                gridIndex: 1, 
+                data: [], 
+                boundaryGap: false, 
+                axisLine: { onZero: false }, 
+                axisTick: { show: false }, 
+                splitLine: { show: false }, 
+                axisLabel: { show: false },  // 关键：隐藏副坐标轴日期
+                min: 'dataMin', 
+                max: 'dataMax' 
+            }
         ],
         yAxis: [
             { scale: true, splitArea: { show: true } },

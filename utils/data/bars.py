@@ -114,7 +114,8 @@ def get_volume_bars(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
     # 比如 0-1000, 1000-2000
     result_df['vol_start'] = (result_df.index * threshold).astype(int)
     result_df['vol_end'] = ((result_df.index + 1) * threshold).astype(int)
-    result_df['date'] = result_df['vol_start'].astype(str) + '-' + result_df['vol_end'].astype(str)
+    result_df['date'] = result_df['date_start'].astype(str) + ' ~ ' + result_df['date_end'].astype(str)
+    # result_df['date'] = result_df['vol_start'].astype(str) + '-' + result_df['vol_end'].astype(str)
     
     # 调整列顺序，保留原有字段
     cols = ['date', 'open', 'high', 'low', 'close', 'volume', 'ticks']

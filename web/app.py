@@ -129,8 +129,15 @@ async def kline_websocket(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            # 关键修复：处理空字符串或非JSON数据
+            # 修复1：处理空数据/连接关闭
             if not data or not data.strip():
+                continue
+            # 修复2：处理纯字符串 ping/pong（非JSON）
+            data_stripped = data.strip()
+            if data_stripped == 'ping':
+                await websocket.send_text(json.dumps({'type': 'pong'}))
+                continue
+            if data_stripped == 'pong':
                 continue
             try:
                 msg = json.loads(data)
@@ -141,11 +148,9 @@ async def kline_websocket(websocket: WebSocket):
                     endpoint = msg.get('endpoint', '')
                     params = msg.get('params', {})
                     
-                    # 关键修复：确保params是dict，避免'list' object is not a mapping
                     if not isinstance(params, dict):
                         params = {}
                     
-                    # 关键修复：解析带查询字符串的endpoint，如 /kline/tables?market=crypto
                     if '?' in endpoint:
                         base_endpoint, query_string = endpoint.split('?', 1)
                         query_params = parse_qs(query_string)
@@ -156,7 +161,6 @@ async def kline_websocket(websocket: WebSocket):
                     
                     loop = asyncio.get_running_loop()
                     
-                    # 端点路由 - 纯WS逻辑
                     if endpoint == '/kline/data':
                         result = await _get_kline_data_ws(
                             market=params.get('market'),
@@ -170,7 +174,7 @@ async def kline_websocket(websocket: WebSocket):
                             bar_threshold=params.get('bar_threshold'),
                             offset=int(params.get('offset', 0)) if params.get('offset') is not None else 0,
                             limit=int(params.get('limit', 50000)) if params.get('limit') is not None else 50000,
-                            sort_order=params.get('sort_order', 'asc')
+                            sort_order='asc'  # 始终正序查询，前端控制加载方向
                         )
                         await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
                         
@@ -345,7 +349,7 @@ async def _get_kline_data_ws(
     bar_threshold: Optional[float] = None,
     offset: int = 0,
     limit: int = 50000,
-    sort_order: str = "asc"
+    sort_order: str = "asc"  # 始终正序，前端控制加载方向
 ):
     if not re.match(r'^[a-zA-Z0-9_]+$', interval):
         return {"error": "Invalid interval format"}
@@ -426,9 +430,9 @@ async def _get_kline_data_ws(
 
     if df.empty:
         if offset == 0:
-            return {"data": [], "total": 0, "offset": offset, "limit": limit, "sort_order": sort_order}
+            return {"data": [], "total": 0, "offset": offset, "limit": limit, "more": False}
         else:
-            return {"data": [], "total": total_count, "offset": offset, "limit": limit, "sort_order": sort_order}
+            return {"data": [], "total": total_count, "offset": offset, "limit": limit, "more": False}
 
     df = df.sort_values('date').reset_index(drop=True)
 
@@ -442,13 +446,16 @@ async def _get_kline_data_ws(
         df['date'] = df['date'].astype(str)
 
     records = df.to_dict(orient="records")
+    
+    # 修复3：返回 more 字段，供前端判断是否还有数据
+    has_more = offset + limit < total_count
 
     return {
         "data": clean_nan(records),
         "total": total_count,
         "offset": offset,
         "limit": limit,
-        "sort_order": sort_order
+        "more": has_more  # 新增字段
     }
 
 def _get_all_tasks_ws():
