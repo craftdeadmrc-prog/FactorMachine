@@ -10,8 +10,10 @@ let currentSymbol = '';
 
 let _renderTimer = null;
 let _renderQueue = [];
-const RENDER_DELAY = 80;
-const BATCH_SIZE = 3;
+// 优化：增加渲染延迟，减少批量渲染时的主线程阻塞
+const RENDER_DELAY = 150;
+// 优化：每次只渲染一块数据，避免批量更新卡顿
+const BATCH_SIZE = 1;
 
 // 全局数据缓存 - 只声明一次
 let currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
@@ -265,7 +267,7 @@ async function loadKline(symbol) {
     const disablePagination = !isTimeBar;  // 特殊bar不分页
     
     let offset = 0;
-    const limit = disablePagination ? 200000 : 50000;  // 特殊bar一次性加载20万条
+    const limit = disablePagination ? 400000 : 100000;  // 特殊bar一次性加载40万条
     let total = 0;
     let loadedCount = 0;
     let hasMore = true;
@@ -330,21 +332,22 @@ async function loadKline(symbol) {
 
             const newChunk = parseKlineData(result.data);
 
-            // === 拼接方向 ===
+            // === 拼接方向 + 优化：使用更高效的数组操作 ===
             if (loadedCount === 0) {
-                // 第一块：直接赋值
-                currentKlineData.dates = [...newChunk.dates];
-                currentKlineData.ohlc = [...newChunk.ohlc];
-                currentKlineData.volumes = [...newChunk.volumes];
-                currentKlineData.ticks = [...newChunk.ticks];
+                // 第一块：直接赋值（使用slice避免引用）
+                currentKlineData.dates = newChunk.dates.slice();
+                currentKlineData.ohlc = newChunk.ohlc.slice();
+                currentKlineData.volumes = newChunk.volumes.slice();
+                currentKlineData.ticks = newChunk.ticks.slice();
             } else if (isTimeBar) {
                 // time bar：新块是更早的数据，拼接到前面
-                currentKlineData.dates = newChunk.dates.concat(currentKlineData.dates);
-                currentKlineData.ohlc = newChunk.ohlc.concat(currentKlineData.ohlc);
-                currentKlineData.volumes = newChunk.volumes.concat(currentKlineData.volumes);
-                currentKlineData.ticks = newChunk.ticks.concat(currentKlineData.ticks);
+                // 优化：使用 unshift + spread 批量前置插入，比多次 concat 更高效
+                currentKlineData.dates.unshift(...newChunk.dates);
+                currentKlineData.ohlc.unshift(...newChunk.ohlc);
+                currentKlineData.volumes.unshift(...newChunk.volumes);
+                currentKlineData.ticks.unshift(...newChunk.ticks);
             } else {
-                // 特殊 bar：拼接到后面（保持用户注释逻辑）
+                // 特殊 bar：拼接到后面
                 currentKlineData.dates.push(...newChunk.dates);
                 currentKlineData.ohlc.push(...newChunk.ohlc);
                 currentKlineData.volumes.push(...newChunk.volumes);
@@ -352,9 +355,9 @@ async function loadKline(symbol) {
             }
 
             loadedCount += newChunk.dates.length;
-            _renderQueue.push({ chunk: newChunk, isFirst: loadedCount === newChunk.dates.length });
+            _renderQueue.push({ chunk: newChunk, isFirst: loadedCount === newChunk.dates.length && loadedCount > 0 });
 
-            // 节流渲染
+            // 节流渲染 - 优化：更细粒度控制
             if (_renderQueue.length >= BATCH_SIZE) {
                 await _flushRenderQueue();
             }
@@ -409,45 +412,55 @@ function _appendDataSilent(newChunk, barType, isFirstChunk) {
     const seriesData = barType === 'time' ? currentKlineData.volumes : currentKlineData.ticks;
     
     const totalPoints = currentKlineData.dates.length;
-    const zoomStart = totalPoints <= 50000 ? 0 : 80;
-    const zoomEnd = 100;
     
+    // 修复：xAxis 必须包含完整配置项，避免 axis undefined 错误
+    const xAxisConfig = [
+        { 
+            type: 'category', 
+            data: currentKlineData.dates, 
+            boundaryGap: false, 
+            axisLine: { onZero: false }, 
+            splitLine: { show: false }, 
+            min: 'dataMin', 
+            max: 'dataMax',
+            axisLabel: { show: true }
+        },
+        { 
+            type: 'category', 
+            gridIndex: 1, 
+            data: currentKlineData.dates, 
+            boundaryGap: false, 
+            axisLine: { onZero: false }, 
+            axisTick: { show: false }, 
+            splitLine: { show: false }, 
+            axisLabel: { show: false },
+            min: 'dataMin', 
+            max: 'dataMax' 
+        }
+    ];
+    
+    // 构建 option 基础配置（xAxis 和 series 必须每次都传）
     const option = {
-        xAxis: [
-            // === 关键修复3：主坐标轴显示label ===
-            { 
-                type: 'category', 
-                data: currentKlineData.dates, 
-                boundaryGap: false, 
-                axisLine: { onZero: false }, 
-                splitLine: { show: false }, 
-                min: 'dataMin', 
-                max: 'dataMax',
-                axisLabel: { show: true }  // 主坐标轴显示日期
-            },
-            // === 关键修复3：副坐标轴隐藏label，避免重复 ===
-            { 
-                type: 'category', 
-                gridIndex: 1, 
-                data: currentKlineData.dates, 
-                boundaryGap: false, 
-                axisLine: { onZero: false }, 
-                axisTick: { show: false }, 
-                splitLine: { show: false }, 
-                axisLabel: { show: false },  // 副坐标轴隐藏日期（关键！）
-                min: 'dataMin', 
-                max: 'dataMax' 
-            }
-        ],
+        xAxis: xAxisConfig,
         series: [
-            { data: currentKlineData.ohlc, silent: !isFirstChunk, animation: false },
-            { data: seriesData, silent: !isFirstChunk, animation: false }
-        ],
-        dataZoom: [
-            { type: 'inside', xAxisIndex: [0, 1], start: zoomStart, end: zoomEnd },
-            { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: zoomStart, end: zoomEnd }
+            { data: currentKlineData.ohlc, silent: true, animation: false },
+            { data: seriesData, silent: true, animation: false }
         ]
     };
+    
+    // 🔑 关键修复：只在首次加载时设置 dataZoom 的 start/end
+    // 后续增量加载时不传 dataZoom，ECharts 会自动保持用户当前的缩放状态
+    if (isFirstChunk) {
+        const zoomStart = totalPoints <= 50000 ? 0 : 80;
+        const zoomEnd = 100;
+        option.dataZoom = [
+            { type: 'inside', xAxisIndex: [0, 1], start: zoomStart, end: zoomEnd, filterMode: 'weakFilter' },
+            { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: zoomStart, end: zoomEnd, filterMode: 'weakFilter' }
+        ];
+    }
+    // 非首次加载时，option 中不包含 dataZoom 字段，setOption 会保持现有缩放状态
+    
+    // 使用 lazyUpdate 减少重绘开销，notMerge: false 保证配置合并而非覆盖
     klineChart.setOption(option, { notMerge: false, lazyUpdate: true });
 }
 
@@ -472,13 +485,44 @@ function parseKlineData(rawData) {
 }
 
 function initEmptyChart(symbol, barType) {
+    // 优化：提升性能参数阈值，启用采样优化
     const performanceOpts = {
         large: true,
-        largeThreshold: 2000,
-        progressive: 2000,
-        progressiveThreshold: 10000,
-        animation: false
+        largeThreshold: 40000,
+        progressive: 10000,        // 优化：提高渐进渲染阈值
+        progressiveThreshold: 40000,  // 优化：大数据量启用采样
+        animation: false,
+        sampling: 'lttb'          // 优化：添加 LTTB 降采样算法
     };
+    
+    // 修复：xAxis 配置必须完整，两个坐标轴都要有 type: 'category'
+    const xAxisConfig = [
+        // 主坐标轴：显示日期
+        { 
+            type: 'category', 
+            data: [], 
+            boundaryGap: false, 
+            axisLine: { onZero: false }, 
+            splitLine: { show: false }, 
+            min: 'dataMin', 
+            max: 'dataMax',
+            axisLabel: { show: true }
+        },
+        // 副坐标轴：隐藏日期，避免重复
+        { 
+            type: 'category', 
+            gridIndex: 1, 
+            data: [], 
+            boundaryGap: false, 
+            axisLine: { onZero: false }, 
+            axisTick: { show: false }, 
+            splitLine: { show: false }, 
+            axisLabel: { show: false },
+            min: 'dataMin', 
+            max: 'dataMax' 
+        }
+    ];
+    
     const option = {
         title: { text: symbol.toUpperCase(), left: 'center' },
         tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
@@ -488,39 +532,15 @@ function initEmptyChart(symbol, barType) {
             { left: '10%', right: '8%', top: '10%', height: '50%' },
             { left: '10%', right: '8%', top: '70%', height: '15%' }
         ],
-        xAxis: [
-            // 主坐标轴：显示日期
-            { 
-                type: 'category', 
-                data: [], 
-                boundaryGap: false, 
-                axisLine: { onZero: false }, 
-                splitLine: { show: false }, 
-                min: 'dataMin', 
-                max: 'dataMax',
-                axisLabel: { show: true }
-            },
-            // 副坐标轴：隐藏日期，避免重复
-            { 
-                type: 'category', 
-                gridIndex: 1, 
-                data: [], 
-                boundaryGap: false, 
-                axisLine: { onZero: false }, 
-                axisTick: { show: false }, 
-                splitLine: { show: false }, 
-                axisLabel: { show: false },  // 关键：隐藏副坐标轴日期
-                min: 'dataMin', 
-                max: 'dataMax' 
-            }
-        ],
+        xAxis: xAxisConfig,
         yAxis: [
             { scale: true, splitArea: { show: true } },
             { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
         ],
         dataZoom: [
-            { type: 'inside', xAxisIndex: [0, 1], start: 80, end: 100 },
-            { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: 80, end: 100 }
+            // 优化：添加 filterMode 减少缩放重绘
+            { type: 'inside', xAxisIndex: [0, 1], start: 80, end: 100, filterMode: 'weakFilter' },
+            { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: 80, end: 100, filterMode: 'weakFilter' }
         ],
         series: [
             {

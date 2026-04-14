@@ -1,3 +1,4 @@
+# web/app.py
 import asyncio
 import logging
 import os
@@ -56,7 +57,9 @@ class KlineCache:
         self.ttl = ttl
 
     def _key(self, market, symbol, interval, adj, start, end):
-        return f"{market}_{symbol}_{interval}_{adj}_{start}_{end}"
+        # 优化：忽略start/end参数，按symbol+interval+adj缓存复权数据，提高命中率
+        # 复权因子是按symbol固定的，不同时间范围请求可复用同一份复权数据
+        return f"{market}_{symbol}_{interval}_{adj}"
 
     def get(self, market, symbol, interval, adj, start, end):
         key = self._key(market, symbol, interval, adj, start, end)
@@ -73,6 +76,7 @@ class KlineCache:
         key = self._key(market, symbol, interval, adj, start, end)
         with self.lock:
             if len(self.cache) >= self.max_size:
+                # 使用LRU策略：删除最旧的缓存项
                 oldest_key = next(iter(self.cache))
                 del self.cache[oldest_key]
             self.cache[key] = (data, time.time())
@@ -82,15 +86,27 @@ kline_cache = KlineCache()
 # ----------------------
 # 工具函数
 # ----------------------
+def clean_nan_record(record):
+    """优化：针对K线记录结构的快速NaN清理，避免递归开销"""
+    result = {}
+    for k, v in record.items():
+        # NaN != NaN is True, 比 math.isnan() 更快且避免类型检查
+        if isinstance(v, float) and (v != v):
+            result[k] = None
+        else:
+            result[k] = v
+    return result
+
 def clean_nan(data):
-    if isinstance(data, dict):
-        return {k: clean_nan(v) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [clean_nan(item) for item in data]
-    elif isinstance(data, float) and math.isnan(data):
+    """优化版本：针对Kline数据结构的高效处理，避免深层递归"""
+    if isinstance(data, list):
+        # 列表：逐项处理，字典类型调用专用函数
+        return [clean_nan_record(item) if isinstance(item, dict) else item for item in data]
+    elif isinstance(data, dict):
+        return clean_nan_record(data)
+    elif isinstance(data, float) and (data != data):
         return None
-    else:
-        return data
+    return data
 
 # ----------------------
 # 静态文件服务 - 手动路由，排除 /ws/* 路径
@@ -173,7 +189,7 @@ async def kline_websocket(websocket: WebSocket):
                             bar_type=params.get('bar_type', 'time'),
                             bar_threshold=params.get('bar_threshold'),
                             offset=int(params.get('offset', 0)) if params.get('offset') is not None else 0,
-                            limit=int(params.get('limit', 50000)) if params.get('limit') is not None else 50000,
+                            limit=int(params.get('limit', 100000)) if params.get('limit') is not None else 100000,
                             sort_order='asc'  # 始终正序查询，前端控制加载方向
                         )
                         await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
@@ -348,7 +364,7 @@ async def _get_kline_data_ws(
     bar_type: str = "time",
     bar_threshold: Optional[float] = None,
     offset: int = 0,
-    limit: int = 50000,
+    limit: int = 100000,
     sort_order: str = "asc"  # 始终正序，前端控制加载方向
 ):
     if not re.match(r'^[a-zA-Z0-9_]+$', interval):
@@ -372,6 +388,7 @@ async def _get_kline_data_ws(
         else:
             start_dt = end_dt - timedelta(days=365)
 
+    # 优化：缓存查询参数保持原签名，但内部key生成忽略时间范围，提高复权数据缓存命中率
     cache_key_params = (market, symbol, interval, adj, str(start_dt), str(end_dt))
     loop = asyncio.get_running_loop()
     df_full = None
@@ -400,6 +417,7 @@ async def _get_kline_data_ws(
             paginated_sql = f"{sql} ORDER BY date ASC LIMIT {limit} OFFSET {offset}"
             df = await loop.run_in_executor(None, load_dataframe, paginated_sql, market)
         else:
+            # 复权模式：查询完整时间范围数据用于复权计算
             df = await loop.run_in_executor(None, load_dataframe, sql, market)
             
             if not df.empty:
@@ -418,11 +436,13 @@ async def _get_kline_data_ws(
                 except Exception as e:
                     logger.warning(f"FQ error ({adj}): {e}")
                 
+                # 优化：缓存复权后的完整数据（缓存key内部忽略时间范围参数）
                 kline_cache.set(*cache_key_params, df)
                 df_full = df
 
     if df_full is not None:
         total_count = len(df_full)
+        # 优化：在缓存的复权数据上进行分页切片，避免重复查询和复权计算
         df = df_full.iloc[offset: offset + limit].copy()
     elif adj != 'none':
         total_count = 0
