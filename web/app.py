@@ -189,7 +189,7 @@ async def kline_websocket(websocket: WebSocket):
                             bar_type=params.get('bar_type', 'time'),
                             bar_threshold=params.get('bar_threshold'),
                             offset=int(params.get('offset', 0)) if params.get('offset') is not None else 0,
-                            limit=int(params.get('limit', 100000)) if params.get('limit') is not None else 100000,
+                            limit=int(params.get('limit', 250000)) if params.get('limit') is not None else 250000,
                             sort_order='asc'  # 始终正序查询，前端控制加载方向
                         )
                         await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
@@ -364,7 +364,7 @@ async def _get_kline_data_ws(
     bar_type: str = "time",
     bar_threshold: Optional[float] = None,
     offset: int = 0,
-    limit: int = 100000,
+    limit: int = 250000,
     sort_order: str = "asc"  # 始终正序，前端控制加载方向
 ):
     if not re.match(r'^[a-zA-Z0-9_]+$', interval):

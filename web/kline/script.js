@@ -267,7 +267,7 @@ async function loadKline(symbol) {
     const disablePagination = !isTimeBar;  // 特殊bar不分页
     
     let offset = 0;
-    const limit = disablePagination ? 400000 : 100000;  // 特殊bar一次性加载40万条
+    const limit = disablePagination ? 1000000 : 250000;  // 特殊bar一次性加载100万条
     let total = 0;
     let loadedCount = 0;
     let hasMore = true;
@@ -451,7 +451,7 @@ function _appendDataSilent(newChunk, barType, isFirstChunk) {
     // 🔑 关键修复：只在首次加载时设置 dataZoom 的 start/end
     // 后续增量加载时不传 dataZoom，ECharts 会自动保持用户当前的缩放状态
     if (isFirstChunk) {
-        const zoomStart = totalPoints <= 50000 ? 0 : 80;
+        const zoomStart = totalPoints <= 25000 ? 0 : 80;
         const zoomEnd = 100;
         option.dataZoom = [
             { type: 'inside', xAxisIndex: [0, 1], start: zoomStart, end: zoomEnd, filterMode: 'weakFilter' },
@@ -488,10 +488,15 @@ function initEmptyChart(symbol, barType) {
     // 优化：提升性能参数阈值，启用采样优化
     const performanceOpts = {
         large: true,
-        largeThreshold: 40000,
-        progressive: 10000,        // 优化：提高渐进渲染阈值
-        progressiveThreshold: 40000,  // 优化：大数据量启用采样
-        animation: false,
+        largeThreshold: 100000,
+        progressive: 25000,        // 优化：提高渐进渲染阈值
+        progressiveThreshold: 100000,  // 优化：大数据量启用采样
+        progressiveChunkMode: 'mod', // 分块模式
+        
+        // 性能优化
+        animation: false,          // 关闭动画
+        hoverAnimation: false,     // 关闭悬停动画
+        silent: true,              // 静默模式（关闭交互）
         sampling: 'lttb'          // 优化：添加 LTTB 降采样算法
     };
     
