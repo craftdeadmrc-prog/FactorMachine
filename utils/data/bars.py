@@ -3,18 +3,6 @@ import numpy as np
 import logging
 
 logger = logging.getLogger(__name__)
-
-def get_time_bars(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Time Bar 逻辑：直接返回原数据，但统一格式，确保有 'ticks' 列（默认为1）
-    """
-    if df.empty:
-        return df
-    result = df.copy()
-    # Time bar 默认每个 bar 消耗 1 个时间单位
-    result['ticks'] = 1
-    return result
-
 def get_volume_bars(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
     """
     Volume Bar 逻辑：
@@ -214,7 +202,7 @@ def get_cusum_bars(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
     cols = ['date', 'open', 'high', 'low', 'close', 'volume', 'ticks']
     return result_df[cols]
 
-def generate_bars(df: pd.DataFrame, bar_type: str = 'time', threshold: float = None) -> pd.DataFrame:
+def generate_bars(df: pd.DataFrame, bar_type: str = 'cusum', threshold: float = None) -> pd.DataFrame:
     """
     统一入口函数
     
@@ -229,9 +217,7 @@ def generate_bars(df: pd.DataFrame, bar_type: str = 'time', threshold: float = N
     if df.empty:
         return df
         
-    if bar_type == 'time':
-        return get_time_bars(df)
-    elif bar_type == 'volume':
+    if bar_type == 'volume':
         if threshold is None or threshold <= 0:
             logger.warning("Volume bar threshold invalid, defaulting to 1000000")
             threshold = 1_000_000
@@ -241,5 +227,3 @@ def generate_bars(df: pd.DataFrame, bar_type: str = 'time', threshold: float = N
             logger.warning("CUSUM bar threshold invalid, defaulting to 0.02")
             threshold = 0.02
         return get_cusum_bars(df, threshold)
-    else:
-        return get_time_bars(df)

@@ -13,14 +13,8 @@ async function loadLogsList() {
         const allTasks = [];
         Object.values(data).forEach(arr => {
             if (Array.isArray(arr)) {
-                // 关键修复：过滤掉 name 为 undefined/empty/unknown 的任务
                 arr.forEach(task => {
-                    if (task && 
-                        task.name && 
-                        typeof task.name === 'string' && 
-                        task.name.trim() && 
-                        task.name !== 'unknown' &&
-                        task.name !== 'REQID') {
+                    if (task && task.name && typeof task.name === 'string') {
                         allTasks.push(task);
                     }
                 });

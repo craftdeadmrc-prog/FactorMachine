@@ -1,5 +1,5 @@
 // web/kline/script.js
-// Kline Logic - Reverse chunk loading for time bars
+// Kline Logic - Reverse chunk loading with correct time axis
 let klineChart = null;
 let allOverviewData = [];
 let renderedCount = 0;
@@ -8,13 +8,12 @@ let fullKlineData = [];
 let currentSortKey = 'symbol';
 let currentSymbol = '';
 
-// 渲染节流控制
 let _renderTimer = null;
 let _renderQueue = [];
 const RENDER_DELAY = 80;
 const BATCH_SIZE = 3;
 
-// 全局数据缓存 - 只声明一次，避免重复声明错误
+// 全局数据缓存 - 只声明一次
 let currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
 
 function init_kline() {
@@ -42,16 +41,8 @@ function init_kline() {
 async function populateMarkets() {
     try {
         const data = await WSAPI.get('/tasks');
-        // 关键修复：严格过滤无效市场名，排除 unknown/empty/REQID 等
         const markets = Object.keys(data).filter(k => {
-            return k && 
-                   typeof k === 'string' && 
-                   k.trim() && 
-                   k !== "System" && 
-                   k !== "unknown" && 
-                   k !== "REQID" && 
-                   !k.startsWith('_') &&
-                   k.toLowerCase() !== 'reqid';
+            return k && typeof k === 'string' && k.trim() && !k.startsWith('_') && k !== 'System';
         });
         const select = document.getElementById('kline-market');
         if (!select) return;
@@ -91,12 +82,15 @@ async function onMarketChange() {
     if (!market) return;
     
     try {
-        // 修复：使用查询参数，移除多余的 useWS 参数
         const tables = await WSAPI.get('/kline/tables', { market: market });
+        if (!Array.isArray(tables)) {
+            console.error('tables is not an array:', tables);
+            if (intervalSelect) intervalSelect.innerHTML = '<option>数据格式错误</option>';
+            return;
+        }
         if (intervalSelect) {
             intervalSelect.innerHTML = '';
-            // 修复：确保 tables 是数组再遍历
-            if (!tables || !Array.isArray(tables) || tables.length === 0) {
+            if (tables.length === 0) {
                 intervalSelect.innerHTML = '<option>该市场无K线数据</option>';
                 return;
             }
@@ -112,7 +106,7 @@ async function onMarketChange() {
         if (loadBtn) loadBtn.disabled = false;
         
         const symbols = await WSAPI.get('/kline/symbols', { market: market });
-        if (symbolList && symbols && Array.isArray(symbols) && symbols.length > 0) {
+        if (symbolList && Array.isArray(symbols) && symbols.length > 0) {
             symbols.forEach(s => {
                 const opt = document.createElement('option');
                 opt.value = s;
@@ -142,7 +136,7 @@ async function loadOverview() {
     
     try {
         const data = await WSAPI.get('/kline/overview', { market, interval });
-        if (data && Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data) && data.length > 0) {
             allOverviewData = data;
             sortSymbols(currentSortKey, null, false);
         } else {
@@ -262,36 +256,53 @@ async function loadKline(symbol) {
         if(!klineChart) return;
     }
 
-    // 关键修复：直接赋值，不要重复声明 let currentKlineData
+    // 关键修复：直接赋值，不要重复声明
     currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
     klineChart.clear();
     initEmptyChart(symbol, barType);
 
-    // 倒序加载策略：仅 time bar 支持倒序，特殊 bar 保持正序（因计算依赖连续性）
+    // 加载策略：time bar 倒序分页（先加载最新块），特殊 bar 正序分页（从最早计算）
     const isTimeBar = barType === 'time';
-    const sortOrder = isTimeBar ? 'desc' : 'asc';
     
     let offset = 0;
     const limit = 50000; 
     let total = 0;
+    let loadedCount = 0;
     let hasMore = true;
+    let isFirstRequest = true;
     _renderQueue = [];
 
     try {
         while (hasMore) {
+            // === 关键修复1：计算分页 offset ===
+            if (isTimeBar) {
+                if (isFirstRequest) {
+                    // 第一请求：offset=0 获取 total
+                    offset = 0;
+                } else {
+                    // 后续请求：从最新往最早加载
+                    // offset = total - 已加载数 - 当前块大小
+                    offset = Math.max(0, total - loadedCount - limit);
+                }
+            } else {
+                // 特殊 bar：正序加载，从最早开始计算
+                offset = loadedCount;
+            }
+            
             const params = {
                 market: market, interval: interval, symbol: symbol,
                 range_type: rangeType, adj: adjType, bar_type: barType,
-                offset: offset, limit: limit, sort_order: sortOrder
+                offset: offset, limit: limit, sort_order: 'asc'  // 始终正序查询
             };
             if (threshold !== null) params.bar_threshold = threshold;
 
             const result = await WSAPI.get('/kline/data', params);
             
+            if (result.error) throw new Error(result.error);
             if (result.detail) throw new Error(result.detail);
 
-            if (!result.data || !Array.isArray(result.data) || result.data.length === 0) {
-                if (offset === 0) {
+            if (!result.data || result.data.length === 0) {
+                if (loadedCount === 0) {
                     klineChart.setOption({ 
                         title: { text: '无数据', subtext: '数据库中未找到记录', left: 'center', top: 'center' } 
                     });
@@ -299,44 +310,70 @@ async function loadKline(symbol) {
                 break;
             }
 
-            if (total === 0 && result.total) total = result.total;
-
-            const newChunk = parseKlineData(result.data);
-
-            // 倒序加载时，后端返回的是降序数据，需要反转以便正确拼接
-            if (sortOrder === 'desc') {
-                newChunk.dates.reverse();
-                newChunk.ohlc.reverse();
-                newChunk.volumes.reverse();
-                newChunk.ticks.reverse();
+            // === 关键修复2：第一请求后获取 total，time bar 重新定位到最新块 ===
+            if (total === 0 && result.total) {
+                total = result.total;
+                
+                if (isTimeBar && isFirstRequest && total > limit) {
+                    // 计算最新块的 offset
+                    const correctOffset = total - limit;
+                    if (correctOffset > 0 && correctOffset !== offset) {
+                        // 重新请求正确的最新块
+                        params.offset = correctOffset;
+                        const newResult = await WSAPI.get('/kline/data', params);
+                        if (newResult.data && newResult.data.length > 0) {
+                            result.data = newResult.data;
+                            result.total = newResult.total;
+                            offset = correctOffset;
+                        }
+                    }
+                }
             }
 
-            // 倒序加载：新数据拼接到前面；正序加载：拼接到后面
-            if (sortOrder === 'desc') {
+            isFirstRequest = false;
+
+            const newChunk = parseKlineData(result.data);
+            // SQL 正序查询，块内已是 [旧→新]，不需要 reverse（保持用户注释掉的逻辑）
+
+            // === 关键修复3：拼接方向 ===
+            if (loadedCount === 0) {
+                // 第一块：直接赋值
+                currentKlineData.dates = [...newChunk.dates];
+                currentKlineData.ohlc = [...newChunk.ohlc];
+                currentKlineData.volumes = [...newChunk.volumes];
+                currentKlineData.ticks = [...newChunk.ticks];
+            } else if (isTimeBar) {
+                // time bar 后续块：新块是更早的数据，拼接到前面
+                // [更早数据] + [已有数据] = [最旧...最新] ✓
                 currentKlineData.dates = newChunk.dates.concat(currentKlineData.dates);
                 currentKlineData.ohlc = newChunk.ohlc.concat(currentKlineData.ohlc);
                 currentKlineData.volumes = newChunk.volumes.concat(currentKlineData.volumes);
                 currentKlineData.ticks = newChunk.ticks.concat(currentKlineData.ticks);
             } else {
+                // 特殊 bar：新块是更晚的数据，拼接到后面（保持用户注释掉的 push 逻辑）
                 currentKlineData.dates.push(...newChunk.dates);
                 currentKlineData.ohlc.push(...newChunk.ohlc);
                 currentKlineData.volumes.push(...newChunk.volumes);
                 currentKlineData.ticks.push(...newChunk.ticks);
             }
 
-            _renderQueue.push({ chunk: newChunk, isFirst: offset === 0, sortOrder: sortOrder });
+            loadedCount += newChunk.dates.length;
+            _renderQueue.push({ chunk: newChunk, isFirst: loadedCount === newChunk.dates.length });
 
             // 节流渲染
-            if (_renderQueue.length >= BATCH_SIZE || !result.more) {
+            if (_renderQueue.length >= BATCH_SIZE) {
                 await _flushRenderQueue();
             }
 
-            if (result.data.length < limit) {
-                hasMore = false;
+            // === 关键修复4：判断是否还有更多数据 ===
+            if (isTimeBar) {
+                // time bar: offset=0 或数据不足表示已加载完
+                if (offset <= 0 || result.data.length < limit) {
+                    hasMore = false;
+                }
             } else {
-                offset += limit;
-                if (currentKlineData.dates.length >= 1500000) { 
-                    console.warn("Reached client-side memory limit.");
+                // 特殊 bar: 数据不足表示已加载完
+                if (result.data.length < limit) {
                     hasMore = false;
                 }
             }
@@ -362,8 +399,8 @@ async function _flushRenderQueue() {
     return new Promise(resolve => {
         _renderTimer = setTimeout(() => {
             while (_renderQueue.length) {
-                const { chunk, isFirst, sortOrder } = _renderQueue.shift();
-                _appendDataSilent(chunk, document.getElementById('kline-bar-type')?.value || 'time', isFirst, sortOrder);
+                const { chunk, isFirst } = _renderQueue.shift();
+                _appendDataSilent(chunk, document.getElementById('kline-bar-type')?.value || 'time', isFirst);
             }
             _renderTimer = null;
             resolve();
@@ -371,13 +408,15 @@ async function _flushRenderQueue() {
     });
 }
 
-function _appendDataSilent(newChunk, barType, isFirstChunk, sortOrder) {
+function _appendDataSilent(newChunk, barType, isFirstChunk) {
     const seriesData = barType === 'time' ? currentKlineData.volumes : currentKlineData.ticks;
     
-    // 倒序加载时，如果是第一块（最新数据），设置 dataZoom 到末尾显示最新
-    const isDesc = sortOrder === 'desc';
-    const zoomStart = (isDesc && isFirstChunk) ? 0 : 80;
-    const zoomEnd = (isDesc && isFirstChunk) ? Math.min(20, 100 * 50000 / Math.max(currentKlineData.dates.length, 1)) : 100;
+    // === 关键修复5：dataZoom 始终聚焦右侧（显示最新数据）===
+    // 无论加载顺序如何，currentKlineData 始终是 [最旧...最新]
+    // dataZoom 默认显示最后 20%，让用户第一眼看到最新数据
+    const totalPoints = currentKlineData.dates.length;
+    const zoomStart = totalPoints <= 50000 ? 0 : 80;  // 数据少时显示全部
+    const zoomEnd = 100;
     
     const option = {
         xAxis: [
@@ -396,6 +435,7 @@ function _appendDataSilent(newChunk, barType, isFirstChunk, sortOrder) {
     // 关键：使用 lazyUpdate 和 notMerge:false 避免图表闪烁
     klineChart.setOption(option, { notMerge: false, lazyUpdate: true });
 }
+
 
 function parseKlineData(rawData) {
     const dates = [];

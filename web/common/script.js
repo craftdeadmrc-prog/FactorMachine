@@ -66,10 +66,16 @@
         };
     };
 
+    // 关键修复：_handleMessage 移除 reqId，避免污染业务数据
     WSClient.prototype._handleMessage = function(data) {
         var parsed = typeof data === 'string' ? JSON.parse(data) : data;
-        var key = parsed.reqId ? 'res_' + parsed.reqId : 'message';
+        var reqId = parsed.reqId;
+        var key = reqId ? 'res_' + reqId : 'message';
         if (this.callbacks[key]) {
+            // 移除 reqId 字段
+            if (reqId !== undefined) {
+                delete parsed.reqId;
+            }
             this.callbacks[key](parsed);
         }
     };
@@ -98,6 +104,7 @@
         this.ws.send(data);
     };
 
+    // 关键修复：request 方法解包 data 字段
     WSClient.prototype.request = function(endpoint, params, options) {
         var self = this;
         options = options || {};
@@ -116,11 +123,16 @@
                 if (res.error) {
                     reject(new Error(res.error));
                 } else {
-                    resolve(res);
+                    // 关键修复：如果响应只有 data 字段，直接返回 data（解包）
+                    if (res.data !== undefined && Object.keys(res).length === 1) {
+                        resolve(res.data);
+                    } else {
+                        resolve(res);
+                    }
                 }
             });
 
-            // 关键：只传递业务参数，过滤掉 reqId 等内部字段
+            // 过滤内部字段，只传递业务参数
             var cleanParams = {};
             if (params && typeof params === 'object') {
                 for (var key in params) {
@@ -158,12 +170,10 @@
         if (this.ws) this.ws.close();
     };
 
-    // API 层：纯 WebSocket 传输，禁止 HTTP fallback
+    // API层：纯WebSocket传输
     var WSAPI = {
         get: function(endpoint, params) {
-            var qs = new URLSearchParams(params || {}).toString();
-            var url = endpoint + (qs ? '?' + qs : '');
-            return window.klineWS.request(url, params, { method: 'GET', timeout: 30000 });
+            return window.klineWS.request(endpoint, params, { method: 'GET', timeout: 30000 });
         },
         post: function(endpoint, body) {
             return window.klineWS.request(endpoint, Object.assign({}, body, { __method: 'POST' }), { timeout: 30000 });

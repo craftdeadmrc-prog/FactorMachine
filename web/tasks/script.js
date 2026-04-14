@@ -9,14 +9,12 @@ function init_tasks() {
 
 async function loadTasks() {
     try {
-        // 纯WS传输
         const data = await WSAPI.get('/tasks');
         const container = document.getElementById('task-selection-list');
         const controls = container.querySelector('.list-controls');
         container.innerHTML = '';
         container.appendChild(controls);
         
-        // 重置全局状态
         currentTasks = {}; 
         selectedTaskNames.clear();
         
@@ -40,9 +38,10 @@ async function loadTasks() {
             group.appendChild(title);
 
             const tasks = data[groupName];
+            if (!Array.isArray(tasks)) continue;
             tasks.forEach(task => {
                 // 过滤无效任务
-                if (!task || !task.name || !task.name.trim()) return;
+                if (!task || !task.name || !task.name.trim() || task.name === 'unknown') return;
                 
                 currentTasks[task.name] = task; 
                 const item = document.createElement('div');
@@ -119,7 +118,6 @@ async function submitExecution() {
     try {
         const result = await WSAPI.post('/run', payload);
         alert(result.message || JSON.stringify(result));
-        // 切换首页
         switchView('dashboard', document.querySelector('.nav-item'));
     } catch (e) {
         alert('执行失败: ' + e.message);

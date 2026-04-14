@@ -4,16 +4,17 @@ import os
 import sys
 import re
 import math
+import json
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from itertools import groupby
+from urllib.parse import parse_qs
 from fastapi import FastAPI, HTTPException, Body, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 import pandas as pd
 import numpy as np
 from threading import Lock
 import time
-import json
 
 # 添加项目根目录到路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,114 +93,147 @@ def clean_nan(data):
         return data
 
 # ----------------------
-# 路由：任务与状态接口
+# 静态文件服务 - 手动路由，排除 /ws/* 路径
 # ----------------------
-@app.get("/api/tasks")
-def get_all_tasks():
-    tasks = task_handler.scheduler.get_all_tasks()
-    valid_tasks_with_ids = [
-        (log_handler.get_db_identifier(t.name, task_handler.scheduler), {
-            "name": t.name,
-            "description": t.description,
-            "type": t.type
-        })
-        for t in tasks
-        if log_handler.get_db_identifier(t.name, task_handler.scheduler) not in ("unknown", "system", "", None)
-    ]
-    valid_tasks_with_ids.sort(key=lambda x: x[0])
-    grouped_tasks = {
-        db_id: [item[1] for item in group]
-        for db_id, group in groupby(valid_tasks_with_ids, key=lambda x: x[0])
-    }
-    grouped = {
-        "System": [{"name": "Init", "description": "初始化市场代码列表", "type": "system"}],
-        **grouped_tasks
-    }
-    return grouped
+@app.get("/{full_path:path}")
+async def serve_static_files(full_path: str):
+    # 关键修复：排除 WebSocket 路径，避免与 /ws/kline 冲突
+    if full_path.startswith("ws/") or full_path == "ws":
+        return JSONResponse(status_code=404, content={"error": "WebSocket endpoint"})
+    
+    # 构建文件路径
+    file_path = os.path.join(current_dir, full_path) if full_path else current_dir
+    
+    # 如果是文件，直接返回
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+    
+    # 如果是目录，尝试返回 index.html
+    index_path = os.path.join(file_path, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
+    
+    # 兜底：返回根目录 index.html（支持 SPA 路由）
+    root_index = os.path.join(current_dir, "index.html")
+    if os.path.isfile(root_index):
+        return FileResponse(root_index)
+    
+    return HTMLResponse(status_code=404, content="Not found")
 
-@app.get("/api/status")
-def get_status():
-    return task_handler.get_status_info()
-
-@app.post("/api/run")
-async def run_tasks(payload: Dict[str, Any] = Body(...)):
-    task_names = payload.get("task_names", [])
-    symbols = payload.get("symbols")
-    start_date = payload.get("start_date")
-    end_date = payload.get("end_date")
-    update = payload.get("update", False)
-    
-    if not task_names:
-        raise HTTPException(status_code=400, detail="未选择任何任务")
-    
-    has_init = "Init" in task_names
-    other_tasks = [t for t in task_names if t != "Init"]
-    
-    if has_init:
-        logger.info("Running Init task...")
-        asyncio.create_task(task_handler.run_init_task(update=True))
-        if not other_tasks:
-            return {"message": "Init task submitted."}
-    
-    loop = asyncio.get_running_loop()
-    tasks_with_ids = [
-        (log_handler.get_db_identifier(t, task_handler.scheduler), t)
-        for t in other_tasks
-    ]
-    valid_tasks = sorted(
-        [(db_id, t) for db_id, t in tasks_with_ids if db_id not in ("unknown", "system", "", None)],
-        key=lambda x: x[0]
-    )
-    tasks_by_market = {
-        db_id: [item[1] for item in group]
-        for db_id, group in groupby(valid_tasks, key=lambda x: x[0])
-    }
-    
-    if not tasks_by_market:
-        raise HTTPException(status_code=400, detail="无法识别任务的市场类型")
-    
-    submission_count = 0
-    default_end_date = pd.Timestamp.now().date()
-    
-    for db_id, market_task_names in tasks_by_market.items():
-        try:
-            if not symbols:
-                sql = "SELECT market, symbol, date FROM symbols"
-            else:
-                in_clause = "', '".join([s.replace("'", "''") for s in symbols])
-                sql = f"SELECT market, symbol, date FROM symbols WHERE symbol IN ('{in_clause}')"
-            df = await loop.run_in_executor(None, load_dataframe, sql, db_id)
-            if df.empty:
-                logger.warning(f"No symbols found in database for market: {db_id}")
+# ----------------------
+# WebSocket 端点 - 纯传输通道
+# ----------------------
+@app.websocket("/ws/kline")
+async def kline_websocket(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # 关键修复：处理空字符串或非JSON数据
+            if not data or not data.strip():
                 continue
-            df['start_date'] = pd.to_datetime(start_date) if start_date else pd.to_datetime(df['date'])
-            df['end_date'] = pd.to_datetime(end_date) if end_date else pd.to_datetime(default_end_date)
-            tasks_params = df[['market', 'symbol', 'start_date', 'end_date']].to_dict('records')
-            submitted = [
-                asyncio.create_task(task_handler.execute_task_internal(task_name, tasks_params, update))
-                for task_name in market_task_names
-            ]
-            submission_count += len(submitted)
-        except Exception as e:
-            logger.error(f"Failed to process tasks for market {db_id}: {e}")
-    
-    return {"message": f"Tasks submitted. Total groups processed: {len(tasks_by_market)}."}
-
-@app.delete("/api/logs/{task_name}")
-def clear_task_logs(task_name: str):
-    return log_handler.clear_task_logs(task_name, task_handler.scheduler)
-
-@app.get("/api/logs/{task_name}")
-def get_task_logs(task_name: str):
-    return log_handler.get_task_logs(task_name, task_handler.scheduler)
+            try:
+                msg = json.loads(data)
+                msg_type = msg.get('type')
+                
+                if msg_type == 'request':
+                    req_id = msg.get('reqId')
+                    endpoint = msg.get('endpoint', '')
+                    params = msg.get('params', {})
+                    
+                    # 关键修复：确保params是dict，避免'list' object is not a mapping
+                    if not isinstance(params, dict):
+                        params = {}
+                    
+                    # 关键修复：解析带查询字符串的endpoint，如 /kline/tables?market=crypto
+                    if '?' in endpoint:
+                        base_endpoint, query_string = endpoint.split('?', 1)
+                        query_params = parse_qs(query_string)
+                        for k, v in query_params.items():
+                            if k not in params:
+                                params[k] = v[0] if len(v) == 1 else v
+                        endpoint = base_endpoint
+                    
+                    loop = asyncio.get_running_loop()
+                    
+                    # 端点路由 - 纯WS逻辑
+                    if endpoint == '/kline/data':
+                        result = await _get_kline_data_ws(
+                            market=params.get('market'),
+                            interval=params.get('interval'),
+                            symbol=params.get('symbol'),
+                            range_type=params.get('range_type', '1m'),
+                            start_date=params.get('start_date'),
+                            end_date=params.get('end_date'),
+                            adj=params.get('adj', 'none'),
+                            bar_type=params.get('bar_type', 'time'),
+                            bar_threshold=params.get('bar_threshold'),
+                            offset=int(params.get('offset', 0)) if params.get('offset') is not None else 0,
+                            limit=int(params.get('limit', 50000)) if params.get('limit') is not None else 50000,
+                            sort_order=params.get('sort_order', 'asc')
+                        )
+                        await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
+                        
+                    elif endpoint == '/kline/overview':
+                        result = await _get_kline_overview_ws(
+                            market=params.get('market'),
+                            interval=params.get('interval')
+                        )
+                        await websocket.send_text(json.dumps({'reqId': req_id, 'data': result}, default=str))
+                        
+                    elif endpoint == '/kline/symbols':
+                        market = params.get('market')
+                        if market:
+                            result = await _get_kline_symbols_ws(market)
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'data': result}, default=str))
+                        else:
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'error': 'market parameter required'}, default=str))
+                            
+                    elif endpoint == '/kline/tables':
+                        market = params.get('market')
+                        if market:
+                            result = await _get_kline_tables_ws(market)
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'data': result}, default=str))
+                        else:
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'error': 'market parameter required'}, default=str))
+                            
+                    elif endpoint == '/status':
+                        result = task_handler.get_status_info()
+                        await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
+                        
+                    elif endpoint == '/tasks':
+                        result = _get_all_tasks_ws()
+                        await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
+                        
+                    elif endpoint.startswith('/logs/'):
+                        task_name = endpoint.split('/')[-1]
+                        if task_name:
+                            result = log_handler.get_task_logs(task_name, task_handler.scheduler)
+                            await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
+                        else:
+                            await websocket.send_text(json.dumps({'reqId': req_id, 'error': 'task_name required'}, default=str))
+                            
+                    else:
+                        await websocket.send_text(json.dumps({'reqId': req_id, 'error': f'Unknown endpoint: {endpoint}'}, default=str))
+                
+                elif msg_type == 'ping':
+                    await websocket.send_text(json.dumps({'type': 'pong'}))
+                    
+            except json.JSONDecodeError as e:
+                logger.error(f"WS JSON decode error: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"WS handler error: {e}", exc_info=True)
+                await websocket.send_text(json.dumps({'error': str(e)}, default=str))
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected")
+    except Exception as e:
+        logger.error(f"WS connection error: {e}", exc_info=True)
 
 # ----------------------
-# K线接口 - 修复：使用查询参数
+# WS专用业务函数
 # ----------------------
-@app.get("/api/kline/symbols")
-async def get_kline_symbols(market: str):
-    if not market:
-        return []
+async def _get_kline_symbols_ws(market: str):
     sql = "SELECT DISTINCT symbol FROM symbols ORDER BY symbol"
     loop = asyncio.get_running_loop()
     try:
@@ -211,11 +245,7 @@ async def get_kline_symbols(market: str):
         logger.error(f"Failed to get symbols: {e}")
         return []
 
-@app.get("/api/kline/tables")
-async def get_kline_tables(market: str):
-    """修复：使用查询参数 ?market=xxx 而非路径参数"""
-    if not market:
-        return []
+async def _get_kline_tables_ws(market: str):
     sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' AND table_name LIKE 'kline_%'"
     loop = asyncio.get_running_loop()
     try:
@@ -233,10 +263,7 @@ async def get_kline_tables(market: str):
         logger.error(f"Failed to get kline tables: {e}")
         return []
 
-@app.get("/api/kline/overview")
-async def get_kline_overview(market: str, interval: str):
-    if not market or not interval:
-        return []
+async def _get_kline_overview_ws(market: str, interval: str):
     table_name = f"kline_{interval}"
     loop = asyncio.get_running_loop()
     
@@ -306,8 +333,7 @@ async def get_kline_overview(market: str, interval: str):
         logger.error(f"Overview error: {e}")
         return clean_nan([{**item, 'close': None, 'pct_change': None} for item in base_data])
 
-@app.get("/api/kline/data")
-async def get_kline_data(
+async def _get_kline_data_ws(
     market: str,
     interval: str,
     symbol: str,
@@ -322,7 +348,7 @@ async def get_kline_data(
     sort_order: str = "asc"
 ):
     if not re.match(r'^[a-zA-Z0-9_]+$', interval):
-        raise HTTPException(status_code=400, detail="Invalid interval format")
+        return {"error": "Invalid interval format"}
     table_name = f"kline_{interval}"
 
     now = datetime.now()
@@ -343,7 +369,6 @@ async def get_kline_data(
             start_dt = end_dt - timedelta(days=365)
 
     cache_key_params = (market, symbol, interval, adj, str(start_dt), str(end_dt))
-
     loop = asyncio.get_running_loop()
     df_full = None
 
@@ -363,14 +388,12 @@ async def get_kline_data(
         if end_date:
             sql += f" AND date <= '{end_dt.strftime('%Y-%m-%d')}'"
         
-        order_dir = "ASC" if sort_order != "desc" else "DESC"
-        
         if adj == 'none':
             count_sql = f"SELECT COUNT(*) as cnt FROM ({sql})"
             cnt_df = await loop.run_in_executor(None, load_dataframe, count_sql, market)
             total_count = int(cnt_df.iloc[0, 0]) if not cnt_df.empty else 0
             
-            paginated_sql = f"{sql} ORDER BY date {order_dir} LIMIT {limit} OFFSET {offset}"
+            paginated_sql = f"{sql} ORDER BY date ASC LIMIT {limit} OFFSET {offset}"
             df = await loop.run_in_executor(None, load_dataframe, paginated_sql, market)
         else:
             df = await loop.run_in_executor(None, load_dataframe, sql, market)
@@ -400,8 +423,6 @@ async def get_kline_data(
     elif adj != 'none':
         total_count = 0
         df = pd.DataFrame()
-    else:
-        pass
 
     if df.empty:
         if offset == 0:
@@ -430,107 +451,27 @@ async def get_kline_data(
         "sort_order": sort_order
     }
 
-# ----------------------
-# WebSocket 端点 - 纯传输通道
-# ----------------------
-@app.websocket("/ws/kline")
-async def kline_websocket(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            data = await websocket.receive_text()
-            try:
-                msg = json.loads(data)
-                msg_type = msg.get('type')
-                
-                if msg_type == 'request':
-                    req_id = msg.get('reqId')
-                    endpoint = msg.get('endpoint')
-                    params = msg.get('params', {})
-                    
-                    # 关键修复：确保params是dict，避免'list' object is not a mapping
-                    if not isinstance(params, dict):
-                        params = {}
-                    
-                    loop = asyncio.get_running_loop()
-                    
-                    if endpoint == '/kline/data':
-                        result = await get_kline_data(
-                            market=params.get('market'),
-                            interval=params.get('interval'),
-                            symbol=params.get('symbol'),
-                            range_type=params.get('range_type', '1m'),
-                            start_date=params.get('start_date'),
-                            end_date=params.get('end_date'),
-                            adj=params.get('adj', 'none'),
-                            bar_type=params.get('bar_type', 'time'),
-                            bar_threshold=params.get('bar_threshold'),
-                            offset=int(params.get('offset', 0)) if params.get('offset') is not None else 0,
-                            limit=int(params.get('limit', 50000)) if params.get('limit') is not None else 50000,
-                            sort_order=params.get('sort_order', 'asc')
-                        )
-                        await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
-                        
-                    elif endpoint == '/kline/overview':
-                        result = await get_kline_overview(
-                            market=params.get('market'),
-                            interval=params.get('interval')
-                        )
-                        await websocket.send_text(json.dumps({'reqId': req_id, 'data': result}, default=str))
-                        
-                    elif endpoint == '/kline/symbols':
-                        market = params.get('market')
-                        if market:
-                            result = await get_kline_symbols(market)
-                            await websocket.send_text(json.dumps({'reqId': req_id, 'data': result}, default=str))
-                        else:
-                            await websocket.send_text(json.dumps({'reqId': req_id, 'error': 'market parameter required'}, default=str))
-                            
-                    elif endpoint == '/kline/tables':
-                        market = params.get('market')
-                        if market:
-                            result = await get_kline_tables(market)
-                            await websocket.send_text(json.dumps({'reqId': req_id, 'data': result}, default=str))
-                        else:
-                            await websocket.send_text(json.dumps({'reqId': req_id, 'error': 'market parameter required'}, default=str))
-                            
-                    elif endpoint == '/status':
-                        result = get_status()
-                        await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
-                        
-                    elif endpoint == '/tasks':
-                        result = get_all_tasks()
-                        await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
-                        
-                    elif endpoint.startswith('/logs/'):
-                        task_name = endpoint.split('/')[-1]
-                        if task_name:
-                            result = log_handler.get_task_logs(task_name, task_handler.scheduler)
-                            await websocket.send_text(json.dumps({'reqId': req_id, **result}, default=str))
-                        else:
-                            await websocket.send_text(json.dumps({'reqId': req_id, 'error': 'task_name required'}, default=str))
-                            
-                    else:
-                        await websocket.send_text(json.dumps({'reqId': req_id, 'error': f'Unknown endpoint: {endpoint}'}, default=str))
-                
-                elif msg_type == 'ping':
-                    await websocket.send_text(json.dumps({'type': 'pong'}))
-                    
-            except json.JSONDecodeError as e:
-                logger.error(f"WS JSON decode error: {e}")
-                await websocket.send_text(json.dumps({'error': 'Invalid JSON format'}))
-            except Exception as e:
-                logger.error(f"WS handler error: {e}", exc_info=True)
-                await websocket.send_text(json.dumps({'error': str(e)}))
-    except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
-    except Exception as e:
-        logger.error(f"WS connection error: {e}", exc_info=True)
-
-# ----------------------
-# 静态文件与生命周期
-# ----------------------
-app.mount("/", StaticFiles(directory=current_dir, html=True), name="web")
+def _get_all_tasks_ws():
+    tasks = task_handler.scheduler.get_all_tasks()
+    valid_tasks_with_ids = [
+        (log_handler.get_db_identifier(t.name, task_handler.scheduler), {
+            "name": t.name,
+            "description": t.description,
+            "type": t.type
+        })
+        for t in tasks
+        if log_handler.get_db_identifier(t.name, task_handler.scheduler) not in ("unknown", "system")
+    ]
+    valid_tasks_with_ids.sort(key=lambda x: x[0])
+    grouped_tasks = {
+        db_id: [item[1] for item in group]
+        for db_id, group in groupby(valid_tasks_with_ids, key=lambda x: x[0])
+    }
+    grouped = {
+        "System": [{"name": "Init", "description": "初始化市场代码列表", "type": "system"}],
+        **grouped_tasks
+    }
+    return grouped
 
 @app.on_event("startup")
 async def startup_event():

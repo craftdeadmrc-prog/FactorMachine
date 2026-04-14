@@ -4,7 +4,6 @@ import logging
 from typing import Dict, Any
 from fastapi import HTTPException
 
-# 设置路径
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.storage import load_dataframe
@@ -24,20 +23,26 @@ def get_db_identifier(task_name: str, scheduler_instance) -> str:
         return "unknown"
     module = task.metadata.get("module", "")
     parts = module.split(".")
-    # 获取模块路径的第二部分作为数据库标识 (如 spider.ashare.xxx -> ashare)
-    if len(parts) >= 2 and parts[1]:
-        return parts[1]
+    if len(parts) >= 2:
+        identifier = parts[1]
+        # 关键修复：只返回有效的市场标识符
+        # 有效标识符：小写字母+数字，长度2-20，排除内部变量名
+        if (identifier and 
+            identifier.isalnum() and 
+            identifier.islower() and 
+            2 <= len(identifier) <= 20 and
+            identifier not in ("reqid", "req_id", "requestid", "unknown", "system")):
+            return identifier
     return "unknown"
 
 def get_task_logs(task_name: str, scheduler_instance) -> Dict[str, Any]:
     """读取指定任务的日志"""
     db_identifier = get_db_identifier(task_name, scheduler_instance)
-    # 关键修复：过滤 unknown 和 system 任务，避免返回无效数据
-    if db_identifier in ("system", "unknown", "", None):
+    if db_identifier in ("system", "unknown"):
         if db_identifier == "system":
             return { "logs": [], "error": "System task logs are not stored in the standard log DB." }
         else:
-            return { "logs": [], "error": f"Unknown task or invalid module path for {task_name}"}
+            return { "logs": [], "error": f"Unknown task or invalid module path for {task_name}" }
     
     db_name = f"{db_identifier}_logs"
     sql = f'SELECT * FROM "{task_name}" ORDER BY date DESC LIMIT 1000'
@@ -51,7 +56,7 @@ def get_task_logs(task_name: str, scheduler_instance) -> Dict[str, Any]:
 def clear_task_logs(task_name: str, scheduler_instance) -> Dict[str, str]:
     """清理指定任务的日志"""
     db_identifier = get_db_identifier(task_name, scheduler_instance)
-    if db_identifier in ("system", "unknown", "", None):
+    if db_identifier in ("system", "unknown"):
         return { "message": "System or unknown tasks do not support log clearing via this endpoint." }
     
     db_name = f"{db_identifier}_logs"
