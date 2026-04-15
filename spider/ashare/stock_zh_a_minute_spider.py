@@ -37,9 +37,6 @@ class StockZhAMinuteSpider(BaseSpider):
         df["market"] = market
         # 转换日期格式
         df["date"] = pd.to_datetime(df["date"])
-        # volume 从手转换为股 (乘以 100)
-        if "volume" in df.columns:
-            df["volume"] = pd.to_numeric(df["volume"], errors="coerce") * 100
         # 确保数值类型
         for col in ["open", "high", "low", "close"]:
             if col in df.columns:

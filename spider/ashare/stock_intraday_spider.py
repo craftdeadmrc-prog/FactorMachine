@@ -1,124 +1,183 @@
 """
-封ip比较严苛
+A股日内逐笔成交爬虫 - OpenTDX版本
+目前精度仅有分钟，用索引*3秒后退，
+但存在一部分类似扰动的情况使得无法和腾讯对齐，
+且个别action性质有偏差比如末尾
 """
-# spider/stock/stock_intraday_sina_spider.py
+# spider/stock/stock_intraday_spider.py
 import asyncio
 import logging
 import pandas as pd
 import akshare as ak
-from datetime import datetime, timedelta
-from typing import List, Dict
+import threading
+from typing import List, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor
+
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe
-from core.proxy import proxy_pool, PROXY_FILE
 from core.scheduler import task
+from core.config import MAX_CONCURRENCY
+from opentdx.tdxClient import TdxClient
+from opentdx.const import MARKET
+
 logger = logging.getLogger(__name__)
-# @task(description="获取A股日内逐笔快照数据（新浪）")
-class StockIntradaySinaSpider(BaseSpider):
+
+_TRADE_DATE_CACHE: Optional[pd.DataFrame] = None
+_TDX_CLIENT: Optional[TdxClient] = None
+_tdx_client_lock = threading.Lock()
+
+
+@task(description="获取A股日内逐笔成交数据（OpenTDX）")
+class StockIntradayTdxSpider(BaseSpider):
     """
-    A股日内大单逐笔爬虫
-    目标：写入表 kline_1s
-    数据源：新浪财经-日内逐笔 (ak.stock_intraday_sina)
-    说明：仅获取大于400手的成交数据，最多获取最近20个交易日数据
+    A股日内逐笔成交爬虫
+    ─────────────────────────────────────
+    目标表：kline_3s | 数据源：OpenTDX stock_transaction
     """
-    resource = "ashare_sina"
-    table_name = "kline_1s"
+    resource = "ashare_tdx"
+    table_name = "kline_3s"
+    
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)
-    def _rename_columns(self, df: pd.DataFrame, symbol: str, market: str) -> pd.DataFrame:
-        """
-        统一字段命名和格式
-        """
-        if df.empty:
-            return df
-        rename_map = {
-            "ticktime": "date",
-            "price": "open",
-            "kind": "type"
-        }
-        if "prev_price" in df.columns:
-            df = df.drop(columns=["prev_price"])
-        df = df.rename(columns=rename_map)
-        # 添加元数据字段
-        df["symbol"] = symbol
-        df["market"] = market
-        # 确保日期格式正确
-        df["date"] = pd.to_datetime(df["date"])
-        # 确保数值类型
-        for col in ["open"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-        # 按时间排序
-        df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
-        return df
+        self.executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
+    
     def check(self):
         super().check()
+        min_allowed = pd.Timestamp("2000-06-09")
+        for t in self.tasks:
+            if t.get("start_date"):
+                sd = pd.Timestamp(t["start_date"]) if isinstance(t["start_date"], str) else t["start_date"]
+                if sd < min_allowed:
+                    t["start_date"] = min_allowed
+    
+    def _rename_columns(self, df: pd.DataFrame, symbol: str, market: MARKET, date: pd.Timestamp) -> pd.DataFrame:
+        """
+        【核心清洗函数】所有数据转换逻辑集中于此
+        修复：groupby().apply() 添加 include_groups=False 消除 FutureWarning
+        """
+        if df is None or df.empty:
+            return pd.DataFrame()
+        
+        # === 1. 删除unknown列 ===
+        if "unknown" in df.columns:
+            df = df.drop(columns="unknown")
+        
+        # === 2. 字段重命名 ===
+        rename_map = {"time": "date", "price": "close", "vol": "volume"}
+        df = df.rename(columns=rename_map)
+        
+        # === 4. action转小写 ===
+        df["action"] = df["action"].astype(str).str.lower()
+        
+        # === 5. 合并完整日期：trade_date + time ===
+        df["time_only"] = pd.to_timedelta(df["date"].astype(str))
+        df["date"] = date + df["time_only"]
+        df = df.drop(columns=["time_only"])
+        
+        # === 6. 时间轴修正：3秒快照偏移 ===
+        # 6.1 按分钟分组 + 索引*3秒偏移
+        df["_mk"] = df["date"].dt.floor("min")
+        
+        def _off(g):
+            g = g.reset_index(drop=True)
+            g["date"] = g["date"] + pd.to_timedelta(g.index.values * 3, unit="s")
+            return g
+        
+        # 🔧 修复：添加 include_groups=False 消除 FutureWarning
+        # pandas 2.2+ 默认会对分组列也执行apply操作，需显式排除
+        df = df.groupby("_mk", group_keys=False).apply(_off, include_groups=False)
+        
+        df = df.drop(columns=["_mk"], errors="ignore").reset_index(drop=True)
+        
+        # === 7. 添加元数据 ===
+        df["symbol"] = symbol
+        df["market"] = market.name.lower()
+        
+        # === 8. 数值类型转换 ===
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce") * 100
+        
+        # === 9. 排序 + 输出字段顺序 ===
+        df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
+        return df[["date", "close", "volume", "action", "symbol", "market"]]
+    
+    def _fetch_clean_save(self, task: Dict, trade_date: pd.Timestamp, idx: int, total: int) -> bool:
+        try:
+            symbol = task["symbol"]
+            market_str = task["market"]
+            market = MARKET.SH if market_str.lower() == "sh" else MARKET.SZ
+            dt = trade_date.date()  # 仅API调用时转为date对象
+            
+            global _TDX_CLIENT
+            if _TDX_CLIENT is None:
+                with _tdx_client_lock:
+                    if _TDX_CLIENT is None:
+                        _TDX_CLIENT = TdxClient()
+            
+            with _tdx_client_lock:
+                raw = _TDX_CLIENT.stock_transaction(market, symbol, dt)
+            
+            if not raw:
+                return False
+            
+            df = self._rename_columns(pd.DataFrame(raw), symbol, market, trade_date)
+            if df.empty:
+                return False
+            
+            save_dataframe(df, table_name=self.table_name, db=self.market, primary_key=["symbol", "date"])
+            return True
+        except Exception as e:
+            logger.warning(f"{task.get('market')}{task.get('symbol')} {trade_date.date()} fail: {e}")
+            return False
+    
     async def run(self):
         if not self.tasks:
-            logger.info("No tasks to run.")
             return
+        
         total = len(self.tasks)
-        logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务，并发执行...")
-        # 信号量控制最大并发数
-        semaphore = asyncio.Semaphore(len(PROXY_FILE))
-        async def fetch_and_save(task_idx, task):
-            symbol = task.get("symbol")
-            market = task.get("market")
-            code = f"{market}{symbol}"
-            # 1. 确定日期范围
-            end_date_str = task.get("end_date")
-            if end_date_str:
-                try:
-                    end_dt = pd.to_datetime(end_date_str)
-                except:
-                    end_dt = pd.Timestamp.now()
-            else:
-                end_dt = pd.Timestamp.now()
-            # 生成日期列表 (倒推20日)
-            date_list = []
-            for i in range(20):
-                d = end_dt - timedelta(days=i)
-                # === 过滤周末 ===
-                # weekday(): 周一为0, 周日为6
-                if d.weekday() >= 5: 
-                    continue
-                date_list.append(d.strftime("%Y%m%d"))
-            # === 修改部分：改回 for 循环顺序爬取各日 ===
-            for d_str in date_list:
-                async with semaphore:
-                    try:
-                        # 调用接口
-                        df = await asyncio.to_thread(
-                            proxy_pool,
-                            ak.stock_intraday_sina,
-                            symbol=code,
-                            date=d_str
-                        )
-                        if df is None or df.empty:
-                            continue
-                        # 数据清洗
-                        df = df.dropna()
-                        df = self._rename_columns(df, symbol, market)
-                        # 保存数据
-                        save_dataframe(
-                            df,
-                            table_name=self.table_name,
-                            db=self.market,
-                            primary_key=["symbol", "date"]
-                        )
-                        # 适当休眠防封
-                        await asyncio.sleep(1)
-                        if task_idx % 20 == 0:
-                            logger.info(f"[{task_idx}/{total}] {code} {d_str} 保存成功 ({len(df)}条)")
-                    except KeyError:
-                        # 非交易日或无大单成交，静默跳过
-                        pass
-                    except Exception as e:
-                        logger.warning(f"股票 {code} 日期 {d_str} 获取失败: {e}")
-        # 2. 构建所有任务的并发协程
-        all_coroutines = []
-        for idx, t in enumerate(self.tasks, 1):
-            all_coroutines.append(fetch_and_save(idx, t))
-        # 3. 统一并发执行
-        await asyncio.gather(*all_coroutines)
-        logger.info(f"{self.__class__.__name__}: 数据抓取完成，共处理 {total} 个任务")
+        
+        # === 1. 预加载交易日缓存（全局单次）===
+        global _TRADE_DATE_CACHE
+        if _TRADE_DATE_CACHE is None:
+            _TRADE_DATE_CACHE = ak.tool_trade_date_hist_sina()
+            _TRADE_DATE_CACHE["trade_date"] = pd.to_datetime(_TRADE_DATE_CACHE["trade_date"])
+            _TRADE_DATE_CACHE = _TRADE_DATE_CACHE.sort_values("trade_date").reset_index(drop=True)
+        
+        # === 2. 预处理任务：收集有效任务 + 日期范围对象化 + 聚合所有交易日 ===
+        valid_tasks = []  # List[Tuple[idx, task, start_ts, end_ts]]
+        all_dates = set()
+        
+        for idx, t in enumerate(self.tasks):
+            sd, ed = t.get("start_date"), t.get("end_date")
+            if not sd or not ed:
+                continue
+            start_date = pd.Timestamp(sd) if isinstance(sd, str) else sd
+            end_date = pd.Timestamp(ed) if isinstance(ed, str) else ed
+            valid_tasks.append((idx, t, start_date, end_date))
+            mask = (_TRADE_DATE_CACHE["trade_date"] >= start_date) & (_TRADE_DATE_CACHE["trade_date"] <= end_date)
+            all_dates.update(_TRADE_DATE_CACHE.loc[mask, "trade_date"])
+        
+        trade_days = sorted(all_dates, reverse=True)  # List[pd.Timestamp]
+        
+        # === 3. 按日同步处理===
+        for trade_date in trade_days:
+            day_jobs = [(idx, t) for idx, t, start, end in valid_tasks if start <= trade_date <= end]
+            if not day_jobs:
+                continue
+            
+            # === 4. 日内并发执行（流式）===
+            loop = asyncio.get_event_loop()
+            futures = [
+                loop.run_in_executor(self.executor, self._fetch_clean_save, t, trade_date, idx+1, total)
+                for idx, t in day_jobs
+            ]
+            await asyncio.gather(*futures)
+        
+        # === 5. 资源清理 ===
+        global _TDX_CLIENT
+        if _TDX_CLIENT:
+            try: _TDX_CLIENT.disconnect()
+            except: pass
+            _TDX_CLIENT = None
+        if hasattr(self, "executor"):
+            self.executor.shutdown(wait=False)

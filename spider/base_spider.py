@@ -44,6 +44,10 @@ class BaseSpider(abc.ABC):
         if not self.tasks:
             return
         # 收集所有 symbol
+        sql = f"SELECT table_name FROM information_schema.tables WHERE table_name='{self.table_name}'"
+        table_check = load_dataframe(sql,db=self.market)
+        if table_check.empty:
+            return
         symbols = [task['symbol'] for task in self.tasks]
         in_clause = "', '".join(symbols)
         sql = f"""
