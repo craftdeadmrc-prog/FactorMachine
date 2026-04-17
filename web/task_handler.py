@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import pandas as pd
-from datetime import datetime
 from typing import List, Dict, Optional, Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -122,8 +121,8 @@ def setup_scheduled_jobs():
 
 def start_background_scheduler():
     """启动定时调度器"""
-    bg_scheduler.start()
-    setup_scheduled_jobs()
+    # bg_scheduler.start()
+    # setup_scheduled_jobs()
     logger.info("Background scheduler started.")
 
 def get_status_info() -> Dict:

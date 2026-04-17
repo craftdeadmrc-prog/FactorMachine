@@ -2,7 +2,6 @@ import logging
 import asyncio
 import contextvars
 from typing import Dict, List, Tuple, Callable
-from datetime import datetime
 import pandas as pd
 from .storage import save_dataframe
 # 定义上下文变量，用于在并发环境中标识当前正在运行的任务
@@ -10,7 +9,7 @@ current_task_name: contextvars.ContextVar[str] = contextvars.ContextVar('current
 class LogCollector:
     """日志收集器，增加时间戳记录"""
     def __init__(self, task_name: str):
-        self.logs: List[Tuple[int, str, datetime]] = []
+        self.logs: List[Tuple[int, str, pd.Timestamp]] = []
         self._handler = None
         self.task_name = task_name  # 用于日志过滤
     def _create_handler(self):
@@ -41,7 +40,7 @@ class LogCollector:
             self._handler = None
     def get_logs(self) -> List[str]:
         return [msg for _, msg, _ in self.logs]
-    def get_logs_with_level(self) -> List[Tuple[int, str, datetime]]:
+    def get_logs_with_level(self) -> List[Tuple[int, str, pd.Timestamp]]:
         return self.logs
 class Task:
     def __init__(self, name: str, description: str, task_type: str, executor: Callable, metadata: Dict = None):

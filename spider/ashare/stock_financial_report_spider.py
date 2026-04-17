@@ -339,7 +339,6 @@ class StockFinancialReportSpider(BaseSpider):
             # 3. 计算四个月前的时间点
             # 使用 pd.DateOffset 处理月份跨度，确保逻辑准确
             four_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=4)
-            # 确保 date 是 datetime 类型
             df['date'] = pd.to_datetime(df['date'])
             # 4. 筛选出需要过滤的 symbol
             # 条件：最新日期 >= 四个月前（即距离今日不超过四个月）

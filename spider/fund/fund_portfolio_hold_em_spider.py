@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, date
 from typing import List, Dict
 
 import pandas as pd
@@ -116,7 +115,6 @@ class FundPortfolioHoldEmSpider(BaseSpider):
             # 3. 计算三个月前的时间点
             # 使用 pd.DateOffset 处理月份跨度，确保逻辑准确
             three_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=3)
-            # 确保 date 是 datetime 类型
             df['date'] = pd.to_datetime(df['date'])
             # 4. 筛选出需要过滤的 symbol
             # 条件：最新日期 >= 三个月前（即距离今日不超过三个月）

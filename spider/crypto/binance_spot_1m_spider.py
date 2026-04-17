@@ -121,7 +121,6 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
                 db=self.market
             )
             if not exist_df.empty:
-                # 转换为 datetime.date 对象集合
                 existing_dates = set(pd.to_datetime(exist_df['date']).dt.date)
                 # 过滤掉已存在的日期
                 dates_to_process = [d for d in all_dates if d.date() not in existing_dates]

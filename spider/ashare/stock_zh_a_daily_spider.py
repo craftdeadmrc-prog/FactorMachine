@@ -48,7 +48,6 @@ class StockDailySpider(BaseSpider):
             start_date = task['start_date']
             end_date = task['end_date']
             code = f"{market}{symbol}"
-
             try:
                 df = await asyncio.to_thread(
                     proxy_pool,

@@ -6,7 +6,6 @@ import sys
 import re
 import math
 import json
-from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Callable, Awaitable
 from itertools import groupby
 from urllib.parse import parse_qs
@@ -154,14 +153,14 @@ async def _handle_kline_data(params: Dict[str, Any], loop: asyncio.AbstractEvent
     offset = int(params.get('offset', 0)) if params.get('offset') is not None else 0
     limit = int(params.get('limit', 250000)) if params.get('limit') is not None else 250000
 
-    now = datetime.now()
+    now = pd.Timestamp.now()
     end_dt = pd.to_datetime(end_date) if end_date else now
     start_dt = pd.to_datetime(start_date) if start_date else (
-        end_dt - timedelta(weeks=1) if range_type == '1w' else
-        end_dt - timedelta(days=30) if range_type == '1m' else
-        end_dt - timedelta(days=365) if range_type == '1y' else
+        end_dt - pd.Timedelta(weeks=1) if range_type == '1w' else
+        end_dt - pd.Timedelta(days=30) if range_type == '1m' else
+        end_dt - pd.Timedelta(days=365) if range_type == '1y' else
         None if range_type == 'all' else
-        end_dt - timedelta(days=365)
+        end_dt - pd.Timedelta(days=365)
     )
 
     cache_key = (market, symbol, interval, adj, str(start_dt), str(end_dt))
@@ -363,7 +362,7 @@ async def _handle_run_task(params: Dict[str, Any], loop: asyncio.AbstractEventLo
     now = pd.Timestamp.now()
     # 规则：若当前时间 < 16:00，默认日期取昨日；否则取今日
     # 原因：16 点后当日数据才完整，16 点前默认查昨日避免空数据
-    reference_date = (now - pd.Timedelta(days=1)).date() if now.hour < 16 else now.date()
+    reference_date = (now - pd.Timedelta(days=1)) if now.hour < 16 else now
     
     # 解析日期参数：优先使用传入值，否则应用参考日期（含 16 点规则）
     parsed_start = pd.to_datetime(start_date) if start_date else None

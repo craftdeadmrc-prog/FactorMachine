@@ -50,7 +50,6 @@ class StockAdjustFactorSpider(BaseSpider):
             # 3. 计算一个月前的时间点
             # 使用 pd.DateOffset 处理月份跨度，确保逻辑准确
             six_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=6)
-            # 确保 latest_date 是 datetime 类型
             df['latest_date'] = pd.to_datetime(df['latest_date'])
             # 4. 筛选出需要过滤的 symbol
             # 条件：最新日期 >= 六个月前（即距离今日不超过六个月）

@@ -1,8 +1,10 @@
 """
 A股日内逐笔成交爬虫 - OpenTDX版本
-目前精度仅有分钟，用索引*3秒后退，
+目前精度仅有分钟，用索引*3秒后退,
 但存在一部分类似扰动的情况使得无法和腾讯对齐，
 且个别action性质有偏差比如末尾
+速度约20条/s,最早到2000-06-09但数据较稀疏,
+难以对齐等待未来解决方法
 """
 # spider/stock/stock_intraday_spider.py
 import asyncio
@@ -27,7 +29,7 @@ _TDX_CLIENT: Optional[TdxClient] = None
 _tdx_client_lock = threading.Lock()
 
 
-@task(description="获取A股日内逐笔成交数据（OpenTDX）")
+# @task(description="获取A股日内逐笔成交数据（OpenTDX）")
 class StockIntradayTdxSpider(BaseSpider):
     """
     A股日内逐笔成交爬虫
@@ -40,6 +42,9 @@ class StockIntradayTdxSpider(BaseSpider):
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)
         self.executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY)
+        self.buffer_lock = threading.Lock()
+        self.day_buffer_dfs = []
+        self.day_task_count = 0
     
     def check(self):
         super().check()
@@ -101,7 +106,17 @@ class StockIntradayTdxSpider(BaseSpider):
         df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
         return df[["date", "close", "volume", "action", "symbol", "market"]]
     
-    def _fetch_clean_save(self, task: Dict, trade_date: pd.Timestamp, idx: int, total: int) -> bool:
+    def _flush_day_buffer(self):
+        """内部方法：刷新当日缓冲数据到存储"""
+        if self.day_buffer_dfs:
+            combined = pd.concat(self.day_buffer_dfs, ignore_index=True)
+            save_dataframe(combined, table_name=self.table_name, db=self.market, primary_key=["symbol", "date"])
+            self.day_buffer_dfs = []
+            self.day_task_count = 0
+    
+    def _fetch_clean_save(self, task: Dict, trade_date: pd.Timestamp, idx: int, total: int,
+                          day_total: int, progress_lock: threading.Lock,
+                          global_count: List[int], day_count: List[int]) -> bool:
         try:
             symbol = task["symbol"]
             market_str = task["market"]
@@ -124,7 +139,22 @@ class StockIntradayTdxSpider(BaseSpider):
             if df.empty:
                 return False
             
-            save_dataframe(df, table_name=self.table_name, db=self.market, primary_key=["symbol", "date"])
+            # 🔧 聚合存储：同一日期内每完成100个股票任务后聚合写入
+            with self.buffer_lock:
+                self.day_buffer_dfs.append(df)
+                self.day_task_count += 1
+                if self.day_task_count >= 100:
+                    self._flush_day_buffer()
+            
+            # 🔧 进度呈现：同一日期内每完成100个股票任务输出一次日志
+            with progress_lock:
+                global_count[0] += 1
+                day_count[0] += 1
+                if day_count[0] % 100 == 0:
+                    logger.info(
+                        f"[{global_count[0]}/{total}] {market_str}{symbol} "
+                        f"{trade_date.date()} ({day_count[0]}/{day_total} stocks done, batch saved)"
+                    )
             return True
         except Exception as e:
             logger.warning(f"{task.get('market')}{task.get('symbol')} {trade_date.date()} fail: {e}")
@@ -133,8 +163,6 @@ class StockIntradayTdxSpider(BaseSpider):
     async def run(self):
         if not self.tasks:
             return
-        
-        total = len(self.tasks)
         
         # === 1. 预加载交易日缓存（全局单次）===
         global _TRADE_DATE_CACHE
@@ -157,21 +185,48 @@ class StockIntradayTdxSpider(BaseSpider):
             mask = (_TRADE_DATE_CACHE["trade_date"] >= start_date) & (_TRADE_DATE_CACHE["trade_date"] <= end_date)
             all_dates.update(_TRADE_DATE_CACHE.loc[mask, "trade_date"])
         
-        trade_days = sorted(all_dates, reverse=True)  # List[pd.Timestamp]
+        trade_days = sorted(all_dates)  # 🔧 正序：从start_date到end_date
+        
+        # 🔧 计算total：股票数×交易日数（所有有效组合）
+        total = sum(
+            1 for td in trade_days
+            for idx, t, start, end in valid_tasks
+            if start <= td <= end
+        )
+        
+        # 🔧 进度计数器（线程安全）
+        progress_lock = threading.Lock()
+        global_count = [0]
         
         # === 3. 按日同步处理===
         for trade_date in trade_days:
+            # 🔧 每日开始时重置当日缓冲
+            with self.buffer_lock:
+                self.day_buffer_dfs = []
+                self.day_task_count = 0
+            
             day_jobs = [(idx, t) for idx, t, start, end in valid_tasks if start <= trade_date <= end]
             if not day_jobs:
                 continue
             
+            # 🔧 同日计数器
+            day_total = len(day_jobs)
+            day_count = [0]
+            
             # === 4. 日内并发执行（流式）===
             loop = asyncio.get_event_loop()
             futures = [
-                loop.run_in_executor(self.executor, self._fetch_clean_save, t, trade_date, idx+1, total)
+                loop.run_in_executor(
+                    self.executor, self._fetch_clean_save, t, trade_date, idx+1,
+                    total, day_total, progress_lock, global_count, day_count
+                )
                 for idx, t in day_jobs
             ]
             await asyncio.gather(*futures)
+            
+            # 🔧 当日所有股票完成后，刷新剩余缓冲数据（不足100个股票的部分）
+            with self.buffer_lock:
+                self._flush_day_buffer()
         
         # === 5. 资源清理 ===
         global _TDX_CLIENT

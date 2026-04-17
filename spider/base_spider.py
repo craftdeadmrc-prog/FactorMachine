@@ -2,7 +2,6 @@ import abc
 import logging
 import pandas as pd
 from typing import List, Dict, Optional
-from datetime import date, datetime
 from core.storage import load_dataframe
 
 logger = logging.getLogger(__name__)
@@ -107,7 +106,7 @@ class BaseSpider(abc.ABC):
                     skip_symbols.append(symbol)
                 else:
                     # 未更新到最新，设置起始日期
-                    task['start_date'] = newest_date
+                    task['start_date'] = pd.Timestamp(newest_date)
                     new_tasks.append(task)
             else:
                 # 异常情况：symbol存在但未查到日期，为了保险起见也加入任务列表
