@@ -72,7 +72,6 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         yesterday = task['end_date']
         date_str = yesterday.strftime("%Y-%m-%d")
         url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/1m/{symbol}-1m-{date_str}.zip"
-        
         try:
             # 使用 proxy_pool 包装同步请求
             status = proxy_pool(self._head_request_sync, url)
@@ -101,14 +100,12 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
             # executor.map 会保持输入顺序，但为了效率我们只需要结果
             # 提交所有任务
             results = executor.map(self._check_one_task, self.tasks)
-            
             # 过滤掉结果为 None 的项
             valid_tasks = [res for res in results if res is not None]
  
         self.tasks = valid_tasks
         logger.info(f"check 后剩余 {len(self.tasks)} 个有效任务")
-    async def process_symbol(self, symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp,
-                        session: aiohttp.ClientSession):
+    async def process_symbol(self, symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp):
         # 1. 生成全量日期范围
         all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
         # 2. 读取数据库已存在的日期进行过滤
@@ -116,10 +113,7 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         try:
             # 假设 date 字段是 TIMESTAMP 或 BIGINT，这里使用 date() 函数转成日期字符串或直接比较
             # 为兼容性，读取后由 pandas 处理
-            exist_df = load_dataframe(
-                sql=f'SELECT DISTINCT "date" FROM "{self.table_name}" WHERE "symbol" = \'{symbol}\'',
-                db=self.market
-            )
+            exist_df = await asyncio.to_thread(load_dataframe,sql=f'SELECT DISTINCT "date" FROM "{self.table_name}" WHERE "symbol" = \'{symbol}\'',db=self.market)
             if not exist_df.empty:
                 existing_dates = set(pd.to_datetime(exist_df['date']).dt.date)
                 # 过滤掉已存在的日期
@@ -142,36 +136,34 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
             if key not in monthly_groups:
                 monthly_groups[key] = []
             monthly_groups[key].append(dt)
-        semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
         async def process_one_date(date_obj: pd.Timestamp) -> Optional[pd.DataFrame]:
             """下载并解析单日数据，返回 DataFrame"""
-            async with semaphore:
-                date_str = date_obj.strftime("%Y-%m-%d")
-                filename = f"{symbol}-1m-{date_str}.zip"
-                url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/1m/{filename}"
-                local_path = os.path.join(self.temp_dir, filename)
-                try:
-                    success = await asyncio.to_thread(proxy_pool, self._download_zip_sync, url, local_path)
-                    if not success:
-                        return None
-                except Exception as e:
-                    logger.error(f"{symbol} {date_str} 下载异常: {e}")
+            date_str = date_obj.strftime("%Y-%m-%d")
+            filename = f"{symbol}-1m-{date_str}.zip"
+            url = f"https://data.binance.vision/data/spot/daily/klines/{symbol}/1m/{filename}"
+            local_path = os.path.join(self.temp_dir, filename)
+            try:
+                success = await asyncio.to_thread(proxy_pool, self._download_zip_sync, url, local_path)
+                if not success:
                     return None
-                df = None
-                try:
-                    with zipfile.ZipFile(local_path, 'r') as zf:
-                        csv_files = [f for f in zf.namelist() if f.endswith('.csv')]
-                        if csv_files:
-                            with zf.open(csv_files[0]) as f:
-                                df = pd.read_csv(f, header=None, names=self.column_names)
-                except Exception as e:
-                    logger.error(f"{symbol} {date_str} 处理 ZIP 失败: {e}")
-                finally:
-                    if os.path.exists(local_path):
-                        os.remove(local_path)
-                if df is not None and not df.empty:
-                    return self._rename_columns(df, symbol)
+            except Exception as e:
+                logger.error(f"{symbol} {date_str} 下载异常: {e}")
                 return None
+            df = None
+            try:
+                with zipfile.ZipFile(local_path, 'r') as zf:
+                    csv_files = [f for f in zf.namelist() if f.endswith('.csv')]
+                    if csv_files:
+                        with zf.open(csv_files[0]) as f:
+                            df = pd.read_csv(f, header=None, names=self.column_names)
+            except Exception as e:
+                logger.error(f"{symbol} {date_str} 处理 ZIP 失败: {e}")
+            finally:
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+            if df is not None and not df.empty:
+                return self._rename_columns(df, symbol)
+            return None
         # 4. 遍历每个月份组，组内并发下载，聚合后写入
         for (year, month), group_dates in monthly_groups.items():
             # 组内并发执行
@@ -197,26 +189,22 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
             return
         total = len(self.tasks)
         logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
-        conn = aiohttp.TCPConnector(limit=10)
-        semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-        async with aiohttp.ClientSession(connector=conn) as session:
-            processed = 0
-            async def process_with_semaphore(task):
-                nonlocal processed
-                symbol = task['symbol']
-                start_date = task['start_date']
-                end_date = task['end_date']
-                try:
-                    async with semaphore:
-                        await self.process_symbol(
-                            symbol, start_date, end_date, session
-                        )
-                except Exception as e:
-                    logger.error(f"处理 {symbol} 失败: {e}")
-                finally:
-                    processed += 1
-                    if processed%10==0:
-                        logger.info(f"{self.__class__.__name__} [{processed}/{total}] 完成 {symbol}")
-            tasks = [process_with_semaphore(task) for task in self.tasks]
-            await asyncio.gather(*tasks)
+        processed = 0
+        async def process_with_semaphore(task):
+            nonlocal processed
+            symbol = task['symbol']
+            start_date = task['start_date']
+            end_date = task['end_date']
+            try:
+                await self.process_symbol(
+                    symbol, start_date, end_date
+                )
+            except Exception as e:
+                logger.error(f"处理 {symbol} 失败: {e}")
+            finally:
+                processed += 1
+                if processed%10==0:
+                    logger.info(f"{self.__class__.__name__} [{processed}/{total}] 完成 {symbol}")
+        tasks = [process_with_semaphore(task) for task in self.tasks]
+        await asyncio.gather(*tasks)
         logger.info(f"{self.__class__.__name__}: 数据抓取完成，已处理 {total} 个任务")

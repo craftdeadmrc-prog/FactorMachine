@@ -358,13 +358,10 @@ async def _handle_run_task(params: Dict[str, Any], loop: asyncio.AbstractEventLo
     if not tasks_by_market:
         return {"error": "No valid tasks found"}
     
-    # === 关键修复：16 点日期逻辑 ===
-    now = pd.Timestamp.now()
-    # 规则：若当前时间 < 16:00，默认日期取昨日；否则取今日
-    # 原因：16 点后当日数据才完整，16 点前默认查昨日避免空数据
-    reference_date = (now - pd.Timedelta(days=1)) if now.hour < 16 else now
-    
-    # 解析日期参数：优先使用传入值，否则应用参考日期（含 16 点规则）
+    reference_date = pd.Timestamp.now()
+    if pd.Timestamp.now().hour<=16:
+        reference_date = reference_date-pd.Timedelta(days=1)    
+    # 解析日期参数：优先使用传入值，否则应用参考日期
     parsed_start = pd.to_datetime(start_date) if start_date else None
     parsed_end = pd.to_datetime(end_date) if end_date else pd.to_datetime(reference_date)
     

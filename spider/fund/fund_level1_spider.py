@@ -1,9 +1,9 @@
 """
-A股超级盘口逐笔数据爬虫 - THSDK版本
+ETF超级盘口逐笔数据爬虫 - THSDK版本
 目标表：kline_1t | 数据源：thsdk tick_super_level1
 精度：tick级 | 限频：100ms/次
 """
-# spider/stock/stock_level1_spider.py
+# spider/fund/fund_level1_spider.py
 import asyncio
 import logging
 import pandas as pd
@@ -31,13 +31,13 @@ TRADE_DIR_MAP = {
 
 # 市场代码映射：API格式(大写) -> 存储格式(小写)
 MARKET_MAP = {
-    'sh':'USHA',
-    'sz':'USZA',
+    'sh':'USHJ',
+    'sz':'USZJ',
 }
 
 
-@task(description="获取A股超级盘口逐笔数据（THSDK）")
-class StockTickSuperSpider(BaseSpider):
+@task(description="获取ETF超级盘口逐笔数据（THSDK）")
+class FundTickSuperSpider(BaseSpider):
     """
     A股超级盘口逐笔数据爬虫
     ─────────────────────────────────────
@@ -56,13 +56,12 @@ class StockTickSuperSpider(BaseSpider):
       - symbol: 6位证券代码
       - market: 市场标识（sh/sz小写）
     """
-    resource = "ashare_ths"
+    resource = "fund_ths"
     table_name = "kline_1t"
     
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)
         self.ths_config = self._load_ths_config()
-        # 🔧 删除重连锁和时间记录：重连逻辑已移除
     
     def _load_ths_config(self) -> Dict[str, str]:
         """从配置文件加载THS账户信息（按行读取）"""
@@ -82,7 +81,6 @@ class StockTickSuperSpider(BaseSpider):
     def check(self):
         """任务校验：限制最早日期为两年前的昨日"""
         super().check()
-        # 两年前的昨日 = today - 2年 - 1天
         min_allowed = pd.Timestamp.today().floor('D') - timedelta(days=365*2)
         for t in self.tasks:
             if t.get("start_date"):
@@ -139,7 +137,7 @@ class StockTickSuperSpider(BaseSpider):
         
         # === 5. 添加元数据 ===
         df['symbol'] = symbol
-        # market转小写：USHA->sh, USZA->sz
+        # market转小写：USHJ->sh, USZJ->sz
         df['market'] = market
         
         # === 6. 数值类型转换 ===
@@ -190,7 +188,7 @@ class StockTickSuperSpider(BaseSpider):
                 return None
             # 清洗转换
             df = self._rename_columns(pd.DataFrame(resp.data[1:-1]), symbol, market)
-            return df  # 🔧 返回 df 而非直接存储
+            return df
             
         except Exception as e:
             logger.warning(f"{task.get('market')}{task.get('symbol')} {trade_date.date()} fail: {e}")
@@ -279,6 +277,6 @@ class StockTickSuperSpider(BaseSpider):
             global_count += day_count
             # 🔧 进度日志（保持原有格式和频率）
             logger.info(f"[{global_count}/{total}] {trade_date.date()} counts: {day_count}")
-                
+        
         # 🔧 完成日志
         logger.info(f"{self.__class__.__name__}: 数据抓取完成，共处理 {total} 个任务")
