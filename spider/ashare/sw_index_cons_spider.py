@@ -28,7 +28,7 @@ class SwIndexConsSpider(BaseSpider):
     """
 
     resource = "ashare_swhy"
-    table_name = "industry"
+    table = "industry"
 
     def __init__(self, tasks=None, update=False):
         # 兼容调度器，但实际不使用 tasks
@@ -82,22 +82,18 @@ class SwIndexConsSpider(BaseSpider):
                 # 构建 SQL IN 查询的字符串部分
                 in_clause = "', '".join(industry_symbols)
                 # 查询表中已存在的 symbol
-                sql = f"""
-                    SELECT DISTINCT industry_symbol
-                    FROM {self.table_name}
-                    WHERE industry_symbol IN ('{in_clause}')
-                """
+                sql = self.loadTable("distinct industry_symbol", self.table, f"where industry_symbol IN ('{in_clause}')")
                 existing_symbols = set()
                 try:
-                    # 使用 self.market 作为 db 参数，与 check 方法保持一致；若未定义则回退到 'ashare'
-                    df = load_dataframe(sql, db=self.market)
+                    # 使用 self.market 作为 db 参数，与 check 方法保持一致
+                    df = load_dataframe(sql, self.market)
                     if not df.empty:
                         existing_symbols = set(df['industry_symbol'].tolist())
                 except Exception as e:
                     error_msg = str(e)
                     # 如果表不存在，说明是首次运行，不需要过滤
                     if "does not exist" in error_msg.lower():
-                        logger.info(f"Table {self.table_name} not initialized yet, will fetch all tasks")
+                        logger.info(f"Table {self.table} not initialized yet, will fetch all tasks")
                     else:
                         logger.error(f"检查已存在行业数据失败: {e}")
                 # 执行过滤
@@ -140,9 +136,9 @@ class SwIndexConsSpider(BaseSpider):
                 try:
                     save_dataframe(
                         cons_df,
-                        table_name=self.table_name,
+                        table=self.table,
                         db="ashare",
-                        primary_key=["symbol", "date", "market"]
+                        primary_key=["market", "symbol", "date"]
                     )
                     logger.info(f"行业 {symbol} 数据已保存，共 {len(cons_df)} 条记录")
                 except Exception as e:

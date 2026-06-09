@@ -1,8 +1,6 @@
 *__pycache__*
-data/*
-spider/deprecated
-factor_results
-factor_eval
+data
 test*
-proxy.txt
-ths.txt
+*.txt
+core/config.json
+*.bak

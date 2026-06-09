@@ -2,32 +2,11 @@ import logging
 import threading
 import requests
 from requests.exceptions import RequestException
-from core.config import PROXY_FILE
+from core.config import PROXY_CONFIG
 
 logger = logging.getLogger(__name__)
 
 _thread_local = threading.local()
-
-def _load_proxies_from_file():
-    """从文件加载代理列表，每行一个代理"""
-    if not PROXY_FILE:
-        return []
-    try:
-        with open(PROXY_FILE, 'r', encoding='utf-8') as f:
-            proxies = [line.strip() for line in f if line.strip()]
-        return proxies
-    except Exception as e:
-        logger.error(f"加载代理文件失败: {e}")
-        return []
-
-# 全局代理列表（启动时加载）
-_proxy_list = _load_proxies_from_file()
-
-def refresh_proxies():
-    """刷新代理列表（支持动态更新）"""
-    global _proxy_list
-    _proxy_list = _load_proxies_from_file()
-    logger.info(f"代理列表已刷新，共 {len(_proxy_list)} 个代理")
 
 def set_current_proxy(proxy):
     """设置当前线程使用的代理地址"""
@@ -97,7 +76,7 @@ def proxy_pool(func, *args, **kwargs):
         logger.debug(f"无代理调用 {func_name} 失败: {e}，将尝试使用代理")
     # 注意：无代理失败后，use_proxy 标志可能仍为 False，后续代理循环会重新设置
 
-    proxies = _proxy_list
+    proxies = PROXY_CONFIG
     if not proxies:
         logger.warning("无可用代理，直接调用原始函数（重试无代理）")
         # 如果没有代理，再次尝试无代理（因为之前可能失败，但可能是临时网络问题）

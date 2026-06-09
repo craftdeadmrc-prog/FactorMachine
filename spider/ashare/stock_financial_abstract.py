@@ -88,6 +88,9 @@ class StockFinancialAbstractSpider(BaseSpider):
         keep_src_cols = [c for c in rename_map.keys() if c in df.columns]
         df = df[keep_src_cols].rename(columns=rename_map)
         df["date"] = pd.to_datetime(df["date"])
+        for c in df.columns.tolist():
+            if c != "date":
+                df[c] = pd.to_numeric(df[c])
         df["symbol"] = symbol
         df["market"] = market
         target_cols = set(rename_map.values())
@@ -170,13 +173,13 @@ class StockFinancialAbstractSpider(BaseSpider):
                 df_pivot = df_pivot.sort_values(["symbol", "date"]).reset_index(drop=True)
 
                 # 获取表名
-                table_name = self.symbol_map[table_cn]
+                table = self.symbol_map[table_cn]
 
                 # 插入数据库
                 try:
                     save_dataframe(
                         df_pivot,
-                        table_name=table_name,
+                        table=table,
                         db=self.market,
                         primary_key=["symbol", "date"]
                     )

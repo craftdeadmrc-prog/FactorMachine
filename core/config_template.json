@@ -1,0 +1,85 @@
+{
+  "MAX_CONCURRENCY": 16,
+  "PROXY_CONFIG": [
+    "http://127.0.0.1:1080"
+  ],
+  "THS_CONFIG": {
+    "username": "yourusername",
+    "password": "yourpassword",
+    "mac": "FF:FF:FF:FF:FF:FF"
+  },
+  "DB_CONFIG": {
+    "ashare": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "ashare_realtime": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "fund": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "fund_realtime": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "ustock": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "ustock_realtime": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "crypto": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "crypto_realtime": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "index": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "index_realtime": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "misc": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    },
+    "logs": {
+      "host": "127.0.0.1",
+      "port": 8848,
+      "user": "admin",
+      "password": "123456"
+    }
+  }
+}

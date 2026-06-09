@@ -120,10 +120,7 @@ class Scheduler:
         for task in tasks:
             self._running_tasks[task.name] = asyncio.create_task(run_one(task))
         # 等待结果
-        results = await asyncio.gather(
-            *[self._running_tasks[task.name] for task in tasks],
-            return_exceptions=True
-        )
+        results = await asyncio.gather(*[self._running_tasks[task.name] for task in tasks])
         result_dict = {}
         for task, res in zip(tasks, results):
             self._running_tasks.pop(task.name, None)

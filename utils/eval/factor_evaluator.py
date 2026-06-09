@@ -71,12 +71,12 @@ class FactorEvaluator:
         monotonicity.columns = [f"ic_{col}_monotonicity" for col in monotonicity.columns]
         ic_summary = ic_summary.join(monotonicity)
         # 输出结果
-        # out_table_name = f"{self.market_type}_factors"
-        # save_dataframe(ic_summary, out_table_name, self.factor_eval_dir)
+        # out_table = f"{self.market_type}_factors"
+        # save_dataframe(ic_summary, out_table, self.factor_eval_dir)
         for ic_col in factors:
             ic_col = str.removeprefix(ic_col,f"{self.market_type}_")
-            out_table_name = f"{self.market_type}_factors_{ic_col}"
+            out_table = f"{self.market_type}_factors_{ic_col}"
             df = ic_summary[[f"ic_{ic_col}_mean",f"ic_{ic_col}_std",f"ic_{ic_col}_t_value",f"ic_{ic_col}_ic_ir",f"ic_{ic_col}_positive_ratio",f"ic_{ic_col}_monotonicity"]]
-            save_dataframe(df, out_table_name, self.factor_eval_dir)
+            save_dataframe(df, out_table, self.factor_eval_dir)
             
         return ic_summary

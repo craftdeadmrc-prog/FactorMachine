@@ -1,20 +1,19 @@
 """
 A股超级盘口逐笔数据爬虫 - THSDK版本
 目标表：kline_1t | 数据源：thsdk tick_super_level1
-精度：tick级 | 限频：100ms/次
+精度：tick级
 """
 # spider/stock/stock_level1_spider.py
 import asyncio
 import logging
 import pandas as pd
-import akshare as ak
 import multiprocessing
 from typing import List, Dict
 from datetime import timedelta
 from ..base_spider import BaseSpider
-from core.storage import save_dataframe
+from core.storage import save_dataframe, load_dataframe, loadTable
 from core.scheduler import task
-from core.config import THS_FILE
+from core.config import THS_CONFIG, MAX_CONCURRENCY
 from thsdk import THS
 
 logger = logging.getLogger(__name__)
@@ -29,11 +28,12 @@ TRADE_DIR_MAP = {
     15: 'order'
 }
 
-# 市场代码映射：API格式(大写) -> 存储格式(小写)
+# 市场代码映射：存储市场 -> THS前缀
 MARKET_MAP = {
-    'sh':'USHA',
-    'sz':'USZA',
+    'sh': ('USHA', 'USHT', 'USHP', 'USHD'),
+    'sz': ('USZA', 'USZT', 'USZP', 'USZD'),
 }
+STOCK_CODE_MAP: Dict[str, str] = {}
 
 
 @task(description="获取A股超级盘口逐笔数据（THSDK）")
@@ -57,32 +57,14 @@ class StockTickSuperSpider(BaseSpider):
       - market: 市场标识（sh/sz小写）
     """
     resource = "ashare_ths"
-    table_name = "kline_1t"
+    table = "kline_1t"
     
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)
-        self.ths_config = self._load_ths_config()
         # 🔧 删除重连锁和时间记录：重连逻辑已移除
     
-    def _load_ths_config(self) -> Dict[str, str]:
-        """从配置文件加载THS账户信息（按行读取）"""
-        config = {"username": "", "password": "", "mac": ""}
-        try:
-            with open(THS_FILE, 'r', encoding='utf-8') as f:
-                lines = [line.strip() for line in f]
-                if len(lines) >= 2:
-                    config["username"] = lines[0]
-                    config["password"] = lines[1]
-                if len(lines) >= 3:
-                    config["mac"] = lines[2]
-        except Exception as e:
-            logger.warning(f"加载THS配置失败: {e}")
-        return config
-    
     def check(self):
-        """任务校验：限制最早日期为两年前的昨日"""
-        super().check()
-        # 两年前的昨日 = today - 2年 - 1天
+        """任务校验：仅限制最早日期为两年前，不再使用父类完整性检查。"""
         min_allowed = pd.Timestamp.today().floor('D') - timedelta(days=365*2)
         for t in self.tasks:
             if t.get("start_date"):
@@ -130,7 +112,7 @@ class StockTickSuperSpider(BaseSpider):
         df = df.rename(columns=rename_map)
         
         # === 3. 成交方向映射 ===
-        df['action'] = df['成交方向'].map(TRADE_DIR_MAP).fillna('unknown')
+        df['action'] = df['成交方向'].map(TRADE_DIR_MAP)
         df = df.drop(columns=['成交方向'])
         
         # === 4. 时间列处理：Unix秒 -> datetime===
@@ -161,35 +143,96 @@ class StockTickSuperSpider(BaseSpider):
         # 只保留实际存在的列
         output_cols = [c for c in output_cols if c in df.columns]
         return df[output_cols]
+
+    def _fetch_stock_codes(self):
+        ths = THS(THS_CONFIG)
+        ths.connect()
+        resp = ths.stock_cn_lists()
+        ths.disconnect()
+        return {item["代码"] for item in resp.data}
+
+    def _search_stock_ths_code(self, symbol: str, market_api):
+        try:
+            ths = THS(THS_CONFIG)
+            ths.connect()
+            resp = ths.search_symbols(str(symbol))
+            ths.disconnect()
+
+            for item in resp.data:
+                ths_code = item["THSCODE"]
+                if ths_code.startswith(market_api):
+                    return ths_code
+        except Exception as e:
+            logger.warning(f"{market_api}{symbol} search fail: {e}")
+            return None
+
+    async def _prepare_stock_tasks(self, valid_tasks):
+        stock_codes = await asyncio.to_thread(self._fetch_stock_codes)
+        prepared_tasks = []
+        search_tasks = []
+
+        for idx, t, start_date, end_date in valid_tasks:
+            task = dict(t)
+            symbol = task["symbol"]
+            market = task["market"]
+            market_api = MARKET_MAP[market]
+            code_key = f"{market}{symbol}"
+
+            ths_code = STOCK_CODE_MAP.get(code_key)
+            if ths_code in stock_codes:
+                task["ths_code"] = ths_code
+                prepared_tasks.append((idx, task, start_date, end_date))
+                continue
+
+            for api in market_api:
+                ths_code = f"{api}{symbol}"
+                if ths_code in stock_codes:
+                    STOCK_CODE_MAP[code_key] = ths_code
+                    task["ths_code"] = ths_code
+                    prepared_tasks.append((idx, task, start_date, end_date))
+                    break
+            else:
+                search_tasks.append((idx, task, start_date, end_date, code_key, symbol, market_api))
+
+        batch_size = MAX_CONCURRENCY
+        for i in range(0, len(search_tasks), batch_size):
+            batch_tasks = search_tasks[i:i + batch_size]
+            batch_args = [
+                (symbol, market_api)
+                for _, _, _, _, _, symbol, market_api in batch_tasks
+            ]
+            results = await self._run_multiprocess_batch(self._search_stock_ths_code, batch_args)
+            for (idx, task, start_date, end_date, code_key, _, _), ths_code in zip(batch_tasks, results):
+                if not ths_code:
+                    logger.warning(f"{task['market']}{task['symbol']} 不在THSDK A股列表中，已跳过")
+                    continue
+                STOCK_CODE_MAP[code_key] = ths_code
+                task["ths_code"] = ths_code
+                prepared_tasks.append((idx, task, start_date, end_date))
+
+        return sorted(prepared_tasks, key=lambda item: item[0])
     
-    def _fetch_clean_save(self, task: Dict, trade_date: pd.Timestamp, ths: THS) -> pd.DataFrame:
+    def _fetch_clean_save(self, task: Dict, trade_date: pd.Timestamp) -> pd.DataFrame:
         """单任务获取-清洗-返回DataFrame（由调用方批量存储）"""
         try:
             symbol = task["symbol"]
             market = task["market"]
-            market_api = MARKET_MAP.get(market)
+            ths_code = task["ths_code"]
             date_str = trade_date.strftime("%Y%m%d")
             
-            # 🔧 多进程兼容：检测 ths 参数类型，如果是 dict 则视为配置，内部创建连接
-            if isinstance(ths, dict):
-                ths_local = THS(ths)
-                ths_local.connect()
-                ths_to_use = ths_local
-                need_disconnect = True
-            else:
-                ths_to_use = ths
-                need_disconnect = False
+            ths = THS(THS_CONFIG)
+            ths.connect()
             
-            resp = ths_to_use.tick_super_level1(f"{market_api}{symbol}", date=date_str, buffer_size=1024*1024*128)
-            
-            if need_disconnect:
-                ths_local.disconnect()
+            resp = ths.tick_super_level1(ths_code, date=date_str, buffer_size=1024*1024*128)
+            ths.disconnect()
             
             if not resp.data:
                 logger.warning(f"{market}{symbol} {trade_date.date()} 无数据")
                 return None
             # 清洗转换
             df = self._rename_columns(pd.DataFrame(resp.data[1:-1]), symbol, market)
+            if df.empty:
+                return None
             return df  # 🔧 返回 df 而非直接存储
             
         except Exception as e:
@@ -197,26 +240,27 @@ class StockTickSuperSpider(BaseSpider):
             return None
     
     async def _run_multiprocess_batch(self, func, args_list):
-        """🔧 新增：在线程池中执行多进程批量任务，避免阻塞 asyncio 事件循环"""
-        def _run():
-            if not args_list:
-                return []
-            processes = min(len(args_list), multiprocessing.cpu_count())
-            with multiprocessing.Pool(processes=processes) as pool:
-                return pool.starmap(func, args_list)
-        return await asyncio.to_thread(_run)
+        """纯进程池批处理：批内等待全部进程返回后再进入下一批，并避免阻塞事件循环。"""
+        if not args_list:
+            return []
+
+        # 进程池上限与当前批次大小一致
+        processes = len(args_list)
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(processes=processes) as pool:
+            async_results = [pool.apply_async(func, args=args) for args in args_list]
+            while True:
+                if all(r.ready() for r in async_results):
+                    break
+                await asyncio.sleep(0.05)
+            return [r.get() for r in async_results]
     
     async def run(self):
-        """主执行入口：按日期串行，日期内按100条分批多进程并行 + 每批立即存储"""
+        """主执行入口：按日期串行，先过滤当日已存在symbol，再按MAX_CONCURRENCY分批执行。"""
         if not self.tasks:
             return
-        
-        # === 1. 预加载交易日缓存（全局单次，通过sina api获取）===
-        trade_date_cache = await asyncio.to_thread(ak.tool_trade_date_hist_sina)
-        trade_date_cache["trade_date"] = pd.to_datetime(trade_date_cache["trade_date"])
-        trade_date_cache = trade_date_cache.sort_values("trade_date").reset_index(drop=True)
-        
-        # === 2. 预处理任务：收集有效任务 + 日期范围 ===
+                
+        # === 1. 预处理任务：收集有效任务 + 日期范围 ===
         valid_tasks = []
         for idx, t in enumerate(self.tasks):
             sd, ed = t.get("start_date"), t.get("end_date")
@@ -224,61 +268,111 @@ class StockTickSuperSpider(BaseSpider):
                 continue
             start_date = pd.Timestamp(sd) if isinstance(sd, str) else sd
             end_date = pd.Timestamp(ed) if isinstance(ed, str) else ed
-            valid_tasks.append((idx, t, start_date, end_date))  
-        
-        # 🔧 计算total：用于进度展示（股票数×交易日数估算）
-        total = sum(
-            max(1, (end - start).days + 1)
-            for idx, t, start, end in valid_tasks
-        )
-        
-        # 🔧 进度：开始时输出全部任务数量
-        logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
-        
-        # 🔧 删除：ths = THS(self.ths_config); ths.connect()  多进程模式下每个子进程独立创建连接
-        
-        # === 3. 按日期优先顺序执行，日期内按100条分批多进程并行 + 每批立即存储 ===
+            valid_tasks.append((idx, t, start_date, end_date))
         if not valid_tasks:
-            return  
+            return
+
+        valid_tasks = await self._prepare_stock_tasks(valid_tasks)
+        if not valid_tasks:
+            logger.warning(f"{self.__class__.__name__}: no task matched THSDK A股 list")
+            return
+
         global_start = min(start for idx, t, start, end in valid_tasks)
         global_end = max(end for idx, t, start, end in valid_tasks)
+
+        start_str = pd.Timestamp(global_start).strftime("%Y.%m.%d")
+        end_str = pd.Timestamp(global_end).strftime("%Y.%m.%d")
+        calendar_sql = f"getMarketCalendar('XSHE',{start_str}, {end_str})"
+        calendar_raw = await asyncio.to_thread(load_dataframe, calendar_sql, self.market)
+        if calendar_raw is None or len(calendar_raw) == 0:
+            logger.warning(f"{self.__class__.__name__}: empty trade calendar from sql: {calendar_sql}")
+            return
+        global_trade_days = sorted(pd.to_datetime(pd.Index(calendar_raw)))
         
-        # 3.2 生成全局交易日序列
-        all_dates = pd.date_range(start=global_start, end=global_end, freq='D')
-        global_trade_days = [d for d in all_dates if d in trade_date_cache["trade_date"].values]
-        
-        # 3.3 日期优先遍历：外层日期，内层按100条分批多进程并行
+        total = sum(
+            1
+            for td in global_trade_days
+            for idx, t, start, end in valid_tasks
+            if start <= td <= end
+        )
+        logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
+                
+        # === 3. 按日期优先顺序执行：每日先读取当日已入库symbol，过滤后再分批 ===
         global_count = 0
+        skipped_count = 0
         for trade_date in global_trade_days:
-            # 🔧 收集当天所有需要执行的任务参数
-            day_task_args = []
-            day_count = 0
-            for idx, t, start_date, end_date in valid_tasks:
-                if not (start_date <= trade_date <= end_date):
-                    continue
-                # 🔧 传入配置 dict 而非 THS 对象，供子进程内部创建连接
-                day_task_args.append((t, trade_date, self.ths_config))
-                day_count += 1
+            day_jobs = [
+                (idx, t)
+                for idx, t, start_date, end_date in valid_tasks
+                if start_date <= trade_date <= end_date
+            ]
+            if not day_jobs:
+                continue
+
+            day_str = trade_date.strftime("%Y.%m.%d")
+            existing_sql = loadTable(
+                "distinct symbol",
+                self.table,
+                self.market,
+                f"where date(date)={day_str}",
+            )
+            existing_df = await asyncio.to_thread(load_dataframe, existing_sql, self.market)
+            existing_symbols = (
+                set(existing_df["symbol"].astype(str).tolist())
+                if existing_df is not None and not existing_df.empty and "symbol" in existing_df.columns
+                else set()
+            )
+
+            # 🔧 先筛掉当日该表中已存在数据的symbol，再对剩余任务分批
+            day_task_args = [
+                (t, trade_date)
+                for _, t in day_jobs
+                if str(t.get("symbol")) not in existing_symbols
+            ]
+            day_skipped = len(day_jobs) - len(day_task_args)
+            skipped_count += day_skipped
+            day_count = len(day_task_args)
             
-            # 🔧 按100条一批切分执行，降低内存峰值
+            day_remain = 0
             if day_task_args:
-                batch_size = 100
+                batch_size = MAX_CONCURRENCY
                 for i in range(0, len(day_task_args), batch_size):
                     batch_args = day_task_args[i:i+batch_size]
-                    results = await self._run_multiprocess_batch(self._fetch_clean_save, batch_args)
-                    # 🔧 过滤None结果后存储，每批立即落盘释放内存
-                    valid_results = [r for r in results if r is not None]
-                    if valid_results:
-                        await asyncio.to_thread(
-                            save_dataframe, 
-                            pd.concat(valid_results, ignore_index=True), 
-                            table_name=self.table_name, 
-                            db=self.market, 
-                            primary_key=["symbol", "date"]
-                            )
+                    last = None
+                    same = 0
+                    while batch_args:
+                        results = await self._run_multiprocess_batch(self._fetch_clean_save, batch_args)
+                        # 🔧 过滤None结果后存储，每批立即落盘释放内存
+                        valid_results = [r for r in results if r is not None]
+                        if valid_results:
+                            save_df = pd.concat(valid_results, ignore_index=True)
+                            await asyncio.to_thread(
+                                save_dataframe,
+                                save_df,
+                                table=self.table,
+                                db=self.market,
+                                freq="tick",
+                                primary_key=["symbol", "date"]
+                                )
+                            fetched_symbols = set(save_df["symbol"].astype(str).tolist())
+                            batch_args = [args for args in batch_args if str(args[0].get("symbol")) not in fetched_symbols]
+
+                        remain = len(batch_args)
+                        if remain == 0:
+                            break
+                        if remain == last:
+                            same += 1
+                        else:
+                            last = remain
+                            same = 1
+                        if same >= 3:
+                            day_remain += remain
+                            break
             global_count += day_count
-            # 🔧 进度日志（保持原有格式和频率）
-            logger.info(f"[{global_count}/{total}] {trade_date.date()} counts: {day_count}")
+            logger.info(
+                f"[{global_count}/{total}] {trade_date.date()} counts: {day_count}, skipped: {day_skipped}, remain: {day_remain}"
+            )
                 
-        # 🔧 完成日志
-        logger.info(f"{self.__class__.__name__}: 数据抓取完成，共处理 {total} 个任务")
+        logger.info(
+            f"{self.__class__.__name__}: 数据抓取完成，共处理 {global_count} 个任务，跳过 {skipped_count} 个已存在任务"
+        )

@@ -10,7 +10,7 @@ import requests
 from typing import Optional, List, Dict
 from ..base_spider import BaseSpider
 from core.storage import save_dataframe, load_dataframe
-from core.config import DATA_PATH, MAX_CONCURRENCY
+from core.config import MAX_CONCURRENCY
 from core.proxy import proxy_pool
 from core.scheduler import task
 from concurrent.futures import ThreadPoolExecutor  # 新增导入
@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 @task(description="获取币安现货1分钟K线数据（日粒度ZIP包）")
 class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
     resource = "spot_binance"
-    table_name = "kline_1m"
-    temp_dir = os.path.join(DATA_PATH, "crypto_binance_temp")
+    table = "kline_1m"
+    temp_dir = os.path.join("./data", "crypto_binance_temp")
     os.makedirs(temp_dir, exist_ok=True)
     # 原始 CSV 列名（共 12 列）
     column_names = [
@@ -87,24 +87,21 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         """
         同步检查任务，利用线程池实现并发检查，避免串行等待
         """
-        if not self.tasks:
-            logger.info("无任务，跳过 check")
-            return
- 
-        logger.info(f"开始并发检查 {len(self.tasks)} 个任务的有效性...")
-        
-        # 使用线程池并发执行，max_workers 控制并发数
-        # MAX_CONCURRENCY 可以作为全局并发限制的参考
-        valid_tasks = []
-        with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as executor:
-            # executor.map 会保持输入顺序，但为了效率我们只需要结果
-            # 提交所有任务
-            results = executor.map(self._check_one_task, self.tasks)
-            # 过滤掉结果为 None 的项
-            valid_tasks = [res for res in results if res is not None]
- 
-        self.tasks = valid_tasks
-        logger.info(f"check 后剩余 {len(self.tasks)} 个有效任务")
+        if not self.update:
+            logger.info(f"开始并发检查 {len(self.tasks)} 个任务的有效性...")
+            
+            # 使用线程池并发执行，max_workers 控制并发数
+            # MAX_CONCURRENCY 可以作为全局并发限制的参考
+            valid_tasks = []
+            with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as executor:
+                # executor.map 会保持输入顺序，但为了效率我们只需要结果
+                # 提交所有任务
+                results = executor.map(self._check_one_task, self.tasks)
+                # 过滤掉结果为 None 的项
+                valid_tasks = [res for res in results if res is not None]
+    
+            self.tasks = valid_tasks
+            logger.info(f"check 后剩余 {len(self.tasks)} 个有效任务")
     async def process_symbol(self, symbol: str, start_date: pd.Timestamp, end_date: pd.Timestamp):
         # 1. 生成全量日期范围
         all_dates = pd.date_range(start=start_date, end=end_date, freq='D')
@@ -113,7 +110,8 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
         try:
             # 假设 date 字段是 TIMESTAMP 或 BIGINT，这里使用 date() 函数转成日期字符串或直接比较
             # 为兼容性，读取后由 pandas 处理
-            exist_df = await asyncio.to_thread(load_dataframe,sql=f'SELECT DISTINCT "date" FROM "{self.table_name}" WHERE "symbol" = \'{symbol}\'',db=self.market)
+            sql = self.loadTable("date", self.table, f"where symbol = '{symbol}'")
+            exist_df = await asyncio.to_thread(load_dataframe, sql=sql, db=self.market)
             if not exist_df.empty:
                 existing_dates = set(pd.to_datetime(exist_df['date']).dt.date)
                 # 过滤掉已存在的日期
@@ -176,9 +174,10 @@ class CryptoBinanceSpot1mKlinesSpider(BaseSpider):
                 # 统一写入一个月的数据
                 save_dataframe(
                     final_df,
-                    table_name=self.table_name,
+                    table=self.table,
                     db=self.market,
-                    primary_key=["symbol", "date"]
+                    freq="minute",
+                    primary_key=["market","symbol", "date"]
                 )
                 logger.info(f"{symbol} {year}-{month:02d} 数据已保存，共 {len(final_df)} 条")
         logger.info(f"{symbol} 处理完成")

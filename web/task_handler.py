@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.scheduler import Scheduler
-from core.storage import load_dataframe
+from core.storage import load_dataframe, loadTable
 from core import init as core_init
 
 logger = logging.getLogger(__name__)
@@ -77,13 +77,13 @@ async def execute_default_scheduled_task(task_name: str):
     parts = module.split(".")
     if len(parts) < 2:
         return
-    db_identifier = parts[1]
-    sql = "SELECT market, symbol, date FROM symbols"
+    db = parts[1]
+    sql = loadTable(["market","symbol","date"], "symbols", db)
     # --- 关键修复：异步读取数据库 ---
     loop = asyncio.get_running_loop()
     try:
         # 将同步的 load_dataframe 放入线程池
-        df = await loop.run_in_executor(None, load_dataframe, sql, db_identifier)
+        df = await loop.run_in_executor(None, load_dataframe, sql, db)
         
         if df.empty:
             logger.warning(f"No symbols found for scheduled task {task_name}")

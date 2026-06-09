@@ -1,4 +1,5 @@
 """
+备注:过时
 A股日内逐笔成交爬虫 - OpenTDX版本
 目前精度仅有分钟，用索引*3秒后退,
 但存在一部分类似扰动的情况使得无法和腾讯对齐，
@@ -25,8 +26,6 @@ from opentdx.const import MARKET
 logger = logging.getLogger(__name__)
 
 _TRADE_DATE_CACHE: Optional[pd.DataFrame] = None
-_TDX_CLIENT: Optional[TdxClient] = None
-_tdx_client_lock = threading.Lock()
 
 
 # @task(description="获取A股日内逐笔成交数据（OpenTDX）")
@@ -37,7 +36,7 @@ class StockIntradayTdxSpider(BaseSpider):
     目标表：kline_3s | 数据源：OpenTDX stock_transaction
     """
     resource = "ashare_tdx"
-    table_name = "kline_3s"
+    table = "kline_3s"
     
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)
@@ -49,11 +48,11 @@ class StockIntradayTdxSpider(BaseSpider):
     def check(self):
         super().check()
         min_allowed = pd.Timestamp("2000-06-09")
-        for t in self.tasks:
-            if t.get("start_date"):
-                sd = pd.Timestamp(t["start_date"]) if isinstance(t["start_date"], str) else t["start_date"]
+        for task in self.tasks:
+            if task.get("start_date"):
+                sd = pd.Timestamp(task["start_date"]) if isinstance(task["start_date"], str) else task["start_date"]
                 if sd < min_allowed:
-                    t["start_date"] = min_allowed
+                    task["start_date"] = min_allowed
     
     def _rename_columns(self, df: pd.DataFrame, symbol: str, market: MARKET, date: pd.Timestamp) -> pd.DataFrame:
         """
@@ -68,6 +67,7 @@ class StockIntradayTdxSpider(BaseSpider):
             df = df.drop(columns="unknown")
         
         # === 2. 字段重命名 ===
+        # 这里的close应该是open
         rename_map = {"time": "date", "price": "close", "vol": "volume"}
         df = df.rename(columns=rename_map)
         
@@ -110,7 +110,7 @@ class StockIntradayTdxSpider(BaseSpider):
         """内部方法：刷新当日缓冲数据到存储"""
         if self.day_buffer_dfs:
             combined = pd.concat(self.day_buffer_dfs, ignore_index=True)
-            save_dataframe(combined, table_name=self.table_name, db=self.market, primary_key=["symbol", "date"])
+            save_dataframe(combined, table=self.table, db=self.market, freq="minute", primary_key=["symbol", "date"])
             self.day_buffer_dfs = []
             self.day_task_count = 0
     
@@ -123,14 +123,8 @@ class StockIntradayTdxSpider(BaseSpider):
             market = MARKET.SH if market_str.lower() == "sh" else MARKET.SZ
             dt = trade_date.date()  # 仅API调用时转为date对象
             
-            global _TDX_CLIENT
-            if _TDX_CLIENT is None:
-                with _tdx_client_lock:
-                    if _TDX_CLIENT is None:
-                        _TDX_CLIENT = TdxClient()
-            
-            with _tdx_client_lock:
-                raw = _TDX_CLIENT.stock_transaction(market, symbol, dt)
+            with TdxClient() as client:
+                raw = client.stock_transaction(market, symbol, dt)
             
             if not raw:
                 return False
@@ -227,12 +221,3 @@ class StockIntradayTdxSpider(BaseSpider):
             # 🔧 当日所有股票完成后，刷新剩余缓冲数据（不足100个股票的部分）
             with self.buffer_lock:
                 self._flush_day_buffer()
-        
-        # === 5. 资源清理 ===
-        global _TDX_CLIENT
-        if _TDX_CLIENT:
-            try: _TDX_CLIENT.disconnect()
-            except: pass
-            _TDX_CLIENT = None
-        if hasattr(self, "executor"):
-            self.executor.shutdown(wait=False)

@@ -1,15 +1,18 @@
-import logging
+﻿import logging
 import pandas as pd
 import akshare as ak
-from core.storage import save_dataframe, load_dataframe
+from core.storage import save_dataframe, load_dataframe, loadTable
 from core.proxy import proxy_pool
 import asyncio
+from core.config import THS_CONFIG, MAX_CONCURRENCY
+from thsdk import THS
 
 logger = logging.getLogger(__name__)
 
 # 全局变量，用于单例模式
 _init_task = None
 _init_lock = asyncio.Lock()
+
 
 async def _fetch_ashare_symbols_async():
     """异步获取A股代码列表（沪市+深市），并直接保存到symbols表"""
@@ -49,9 +52,9 @@ async def _fetch_ashare_symbols_async():
         await asyncio.to_thread(
             save_dataframe,
             pd.DataFrame(symbols_list),
-            table_name='symbols',
+            table='symbols',
             db='ashare',
-            primary_key=['market', 'symbol']
+            primary_key=['market', 'symbol', 'date']
         )
         logger.info(f"Stored {len(symbols_list)} symbols for ashare.")
     else:
@@ -98,7 +101,7 @@ async def _fetch_fund_symbols_async():
         # 获取日线数据并保存
         def fetch_and_save_daily():
             try:
-                df = proxy_pool(ak.fund_etf_hist_sina, symbol=code)
+                df = ak.fund_etf_hist_sina(symbol=code)
                 if df is None or df.empty:
                     logger.warning(f"ETF {code} 返回空数据")
                     return None
@@ -110,7 +113,7 @@ async def _fetch_fund_symbols_async():
                 df["volume"] = df["volume"]*100
                 df["date"] = pd.to_datetime(df["date"])
                 # 写入日线表
-                save_dataframe(df, table_name="kline_1d", db="fund", primary_key=["symbol", "date"])
+                save_dataframe(df, table="kline_1d", db="fund", primary_key=["symbol", "date"])
                 # 返回最早日期作为上市日期
                 return df['date'].min()
             except Exception as e:
@@ -126,9 +129,9 @@ async def _fetch_fund_symbols_async():
             await asyncio.to_thread(
                 save_dataframe,
                 pd.DataFrame([item]),
-                table_name='symbols',
+                table='symbols',
                 db='fund',
-                primary_key=['market', 'symbol']
+                primary_key=['market', 'symbol', 'date']
             )
             logger.info(f"基金 {symbol} 信息已写入 symbols 表")
         except Exception as e:
@@ -136,12 +139,12 @@ async def _fetch_fund_symbols_async():
 
     # 并发执行所有基金的处理
     tasks = [asyncio.create_task(process_one_fund(item)) for item in fund_list]
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*tasks)
 
 async def _fetch_crypto_symbols_async():
     """
     异步获取加密货币代码列表，并过滤退市及上市不足一年的品种。
-    每处理完一个 symbol，立即将其信息写入 symbols 表。
+    分批处理 symbol，合并后批量写入 symbols 表。
     """
     import requests
     import xml.etree.ElementTree as ET
@@ -255,21 +258,207 @@ async def _fetch_crypto_symbols_async():
             'short_name': symbol[:-4],
             'date': date
         }
-        # 立即写入 symbols 表
+        return item
+
+    batch_size = MAX_CONCURRENCY
+    for i in range(0, len(raw_symbols), batch_size):
+        batch_symbols = raw_symbols[i:i + batch_size]
+        tasks = [asyncio.create_task(process_one_crypto(sym)) for sym in batch_symbols]
+        results = await asyncio.gather(*tasks)
+
+        valid_items = [r for r in results if r is not None]
+        if valid_items:
+            try:
+                await asyncio.to_thread(
+                    save_dataframe,
+                    pd.DataFrame(valid_items),
+                    table='symbols',
+                    db='crypto',
+                    primary_key=['market', 'symbol', 'date']
+                )
+            except Exception as e:
+                logger.warning(f"写入加密货币批量 symbols 表失败: {e}")
+
+        logger.info(f"crypto batch saved: {min(i + batch_size, len(raw_symbols))}/{len(raw_symbols)} symbols")
+
+async def _fetch_index_symbols_async():
+    """异步获取股票指数代码列表，并保存到symbols表"""
+    def sync_fetch():
+        symbols = []
         try:
+            df = ak.index_stock_info()
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    code = row['index_code']
+                    # 根据指数代码首位判断市场：0开头为上交所，3开头为深交所
+                    if code.startswith('0'):
+                        market = 'sh'
+                    elif code.startswith('3'):
+                        market = 'sz'
+                    else:
+                        # 其他市场暂不处理或按需扩展
+                        continue
+                    symbols.append({
+                        'market': market,
+                        'symbol': code,
+                        'short_name': row['display_name'],
+                        'date': pd.to_datetime(row['publish_date'], format='%Y-%m-%d') if pd.notna(row['publish_date']) else None
+                    })
+        except Exception as e:
+            logger.error(f"Failed to fetch index symbols: {e}")
+        return symbols
+
+    symbols_list = await asyncio.to_thread(sync_fetch)
+    if symbols_list:
+        await asyncio.to_thread(
+            save_dataframe,
+            pd.DataFrame(symbols_list),
+            table='symbols',
+            db='index',  # 数据库仍使用index库隔离
+            primary_key=['market', 'symbol', 'date']
+        )
+        logger.info(f"Stored {len(symbols_list)} symbols for index.")
+    else:
+        logger.warning("No index symbols fetched.")
+
+async def _fetch_misc_symbols_async():
+    """
+    异步获取另类数据（如央视新闻）的占位symbol，并保存到symbols表。
+    由于另类数据没有特定的symbol，使用占位符 '__placeholder__' 且date默认为1900-01-01。
+    """
+    placeholder_item = {
+        'market': 'misc',
+        'symbol': 'misc',
+        'short_name': 'misc',
+        'date': pd.to_datetime('1970-01-01')
+    }
+    try:
+        await asyncio.to_thread(
+            save_dataframe,
+            pd.DataFrame([placeholder_item]),
+            table='symbols',
+            db='misc',
+            primary_key=['market', 'symbol', 'date']
+        )
+        logger.info("Stored placeholder symbol for misc.")
+    except Exception as e:
+        logger.error(f"Failed to store misc placeholder symbol: {e}")
+
+
+async def _fetch_ustock_symbols_async():
+    """
+    异步初始化美股(ustock)代码列表与基础信息。
+    - basic_info: 最终字段去掉 short_name
+    - symbols:    仅保留 market/symbol/short_name/date
+    """
+    rename_map = {
+        "full_name": ["org_name_cn", "org_name_en"],
+        "short_name": ["org_short_name_cn", "org_short_name_en"],
+        "legal_representative": ["legal_representative"],
+        "register_location": ["reg_address_cn", "reg_address_en"],
+        "office_address": ["office_address_cn", "office_address_en"],
+        "register_capital": ["reg_asset"],
+        "date": ["listed_date"],
+        "main_business": ["main_operation_business"],
+        "business_scope": ["operating_scope"],
+        "description": ["org_cn_introduction"],
+        "secretary": ["secretary"],
+        "ceo": ["general_manager"],
+        "chairman": ["chairman"],
+        "mainholder": ["mainholder"],
+        "province_id": ["district_encode"],
+        "employee": ["staff_num"],
+        "book_price": ["actual_issue_price"],
+        "ipo_shares": ["actual_issue_total_shares_num"],
+        "total_raise_capital": ["total_raise_capital"],
+        "executives_nums": ["executives_nums"],
+    }
+    market_map = {
+        "UNQQ": "nasdaq",
+        "UNYN": "nyse",
+        "UNYA": "nysemkt",
+        "UNYC": "cboe",
+        "UNQS": "nasdaqcm",
+    }
+
+    def get_us_codes_sync():
+        ths = THS(THS_CONFIG)
+        try:
+            ths.connect()
+            us_list = ths.stock_us_lists()
+            return sorted(set(item["代码"] for item in us_list.data))
+        finally:
+            try:
+                ths.disconnect()
+            except Exception:
+                pass
+
+    try:
+        us_codes = await asyncio.to_thread(get_us_codes_sync)
+    except Exception as e:
+        logger.error(f"Failed to fetch ustock codes from THS: {e}")
+        return
+
+    async def process_one_ustock(code):
+        try:
+            symbol = code[4:]
+            market = market_map.get(code[:4])
+            def fetch_one():
+                df = proxy_pool(ak.stock_individual_basic_info_us_xq, symbol)
+                pvt = df.pivot_table(columns="item", values="value", aggfunc="first")
+                out = pd.DataFrame(index=pvt.index)
+                for target, sources in rename_map.items():
+                    src = next((col for col in sources if col in pvt.columns), None)
+                    out[target] = pvt[src] if src else pd.NA
+                out = out[list(rename_map.keys())].copy()
+                out["symbol"] = symbol
+                out["market"] = market
+                out["date"] = pd.to_datetime(out["date"], unit="ms", errors="coerce")
+                out = out.sort_values("symbol").reset_index(drop=True)
+                return out
+            df = await asyncio.to_thread(fetch_one)
+            numeric_cols = ['executives_nums', 'total_raise_capital', 'ipo_shares', 'book_price', 'employee', 'register_capital']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').astype('float')
+            basic_df = df.drop(columns=["short_name"], errors="ignore")
+            symbol_df = df[["market", "symbol", "short_name", "date"]].copy()
+            return basic_df, symbol_df
+        except Exception as e:
+            logger.warning(f"Failed to process ustock {code}: {e}")
+            return None, None
+    batch_size = 10
+    for i in range(0, len(us_codes), batch_size):
+        batch_codes = us_codes[i:i + batch_size]
+        tasks = [asyncio.create_task(process_one_ustock(code)) for code in batch_codes]
+        results = await asyncio.gather(*tasks)
+
+        basic_dfs = [r[0] for r in results if r[0] is not None and not r[0].empty]
+        symbol_dfs = [r[1] for r in results if r[1] is not None and not r[1].empty]
+
+        if basic_dfs:
+            basic_batch_df = pd.concat(basic_dfs, ignore_index=True)
             await asyncio.to_thread(
                 save_dataframe,
-                pd.DataFrame([item]),
-                table_name='symbols',
-                db='crypto',
-                primary_key=['market', 'symbol']
+                basic_batch_df,
+                table="basic_info",
+                db="ustock",
+                primary_key=["symbol", "date"]
             )
-            logger.info(f"加密货币 {symbol} 信息已写入 symbols 表")
-        except Exception as e:
-            logger.warning(f"写入加密货币 {symbol} 到 symbols 表失败: {e}")
 
-    tasks = [asyncio.create_task(process_one_crypto(sym)) for sym in raw_symbols]
-    await asyncio.gather(*tasks, return_exceptions=True)
+        if symbol_dfs:
+            symbol_batch_df = pd.concat(symbol_dfs, ignore_index=True)
+            await asyncio.to_thread(
+                save_dataframe,
+                symbol_batch_df,
+                table="symbols",
+                db="ustock",
+                primary_key=["market", "symbol", "date"]
+            )
+
+        logger.info(f"ustock batch saved: {min(i + batch_size, len(us_codes))}/{len(us_codes)} symbols")
+        # await asyncio.sleep(0.1)
+
 
 async def _process_market(market, fetch_func, update):
     """
@@ -279,16 +468,17 @@ async def _process_market(market, fetch_func, update):
     if not update:
         try:
             # 检查 symbols 表是否已存在数据且完整（这里简单判断非空即视为完整）
+            sql = loadTable(["market", "symbol"], "symbols", market)
             df_existing = await asyncio.to_thread(
                 load_dataframe,
-                f"SELECT market, symbol FROM symbols",
-                db=market
+                sql,
+                market
             )
-            if not df_existing.empty and not df_existing.isna().any().any():
-                logger.info(f"Symbols for {market} already exist and are complete. Skipping.")
-                return
         except Exception as e:
             logger.warning(f"Failed to load existing symbols for {market}: {e}")
+        if not df_existing.empty and not df_existing.isna().any().any():
+            logger.info(f"Symbols for {market} already exist and are complete. Skipping.")
+            return
 
     logger.info(f"Fetching symbols for {market}...")
     # 异步函数，内部已处理数据库写入
@@ -324,9 +514,12 @@ async def init(update=False):
                 ('ashare', _fetch_ashare_symbols_async),
                 ('fund', _fetch_fund_symbols_async),
                 ('crypto', _fetch_crypto_symbols_async),
+                ('index', _fetch_index_symbols_async),
+                ('ustock', _fetch_ustock_symbols_async),
+                ('misc', _fetch_misc_symbols_async),  # 另类数据占位，兼容无symbol场景
             ]
             tasks = [_process_market(market, func, update) for market, func in markets]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*tasks)
 
         _init_task = asyncio.create_task(_init_impl())
         return _init_task

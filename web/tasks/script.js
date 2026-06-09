@@ -9,7 +9,7 @@ function init_tasks() {
 
 async function loadTasks() {
     try {
-        const data = await WSAPI.get('/tasks');
+        const data = await WSAPI.call('tasks.get');
         const container = document.getElementById('task-selection-list');
         const controls = container.querySelector('.list-controls');
         container.innerHTML = '';
@@ -41,7 +41,7 @@ async function loadTasks() {
             if (!Array.isArray(tasks)) continue;
             tasks.forEach(task => {
                 // 过滤无效任务
-                if (!task || !task.name || !task.name.trim() || task.name === 'unknown') return;
+                if (!task || !task.name || !task.name.trim() || false) return;
                 
                 currentTasks[task.name] = task; 
                 const item = document.createElement('div');
@@ -116,7 +116,7 @@ async function submitExecution() {
     };
 
     try {
-        const result = await WSAPI.post('/run', payload);
+        const result = await WSAPI.call('tasks.run', payload);
         alert(result.message || JSON.stringify(result));
         switchView('dashboard', document.querySelector('.nav-item'));
     } catch (e) {

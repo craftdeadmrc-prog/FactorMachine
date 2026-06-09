@@ -1,7 +1,8 @@
-import logging
+﻿import logging
 import asyncio
 import contextvars
 from typing import Dict, List, Tuple, Callable
+from functools import partial
 import pandas as pd
 from .storage import save_dataframe
 # 定义上下文变量，用于在并发环境中标识当前正在运行的任务
@@ -56,11 +57,7 @@ class Task:
         token = current_task_name.set(self.name)
         self._log_collector = LogCollector(self.name) # 传入 name 用于过滤
         self._log_collector.start()
-        module_path = self.metadata.get('module', '')
-        # 增加安全检查防止 index out of range
-        parts = module_path.split('.')
-        market = parts[1] if len(parts) > 1 else 'unknown'
-        db_name = f"{market}_logs"
+        db_name = "logs"
         try:
             result = await self.executor(**kwargs)
             logs_with_level = self._log_collector.get_logs_with_level()
@@ -93,18 +90,21 @@ class Task:
                     logging.WARNING: "WARNING", logging.ERROR: "ERROR",
                     logging.CRITICAL: "CRITICAL"
                 }).fillna("UNKNOWN")
-                df = df[["date", "level", "message"]]
+                df["symbol"] = self.name
+                df = df[["date", "symbol", "level", "message"]]
                 # --- 关键修复：异步保存日志 ---
                 # 使用 run_in_executor 防止写入数据库时阻塞 Web 服务
                 loop = asyncio.get_running_loop()
                 try:
-                    # 注意：如果 save_dataframe 参数包含关键字参数，建议用 lambda 或 functools.partial
-                    # 这里假设 save_dataframe(df, name, db, primary_key)
-                    await loop.run_in_executor(
-                        None, 
-                        save_dataframe, 
-                        df, self.name, db_name, ["date"]
+                    write_logs = partial(
+                        save_dataframe,
+                        df,
+                        self.name,
+                        db_name,
+                        "tick",
+                        ["level", "symbol", "date"],
                     )
+                    await loop.run_in_executor(None, write_logs)
                 except Exception as e:
                     logging.error(f"Failed to save logs for {self.name}: {e}")
     def get_logs(self):

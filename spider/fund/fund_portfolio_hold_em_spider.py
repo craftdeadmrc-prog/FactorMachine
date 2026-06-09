@@ -7,7 +7,7 @@ import pandas as pd
 import akshare as ak
 
 from ..base_spider import BaseSpider
-from core.storage import save_dataframe, load_dataframe
+from core.storage import save_dataframe
 from core.proxy import proxy_pool
 from core.scheduler import task
 
@@ -22,7 +22,7 @@ class FundPortfolioHoldEmSpider(BaseSpider):
     数据源：天天基金网-基金档案-投资组合 (ak.fund_portfolio_hold_em)
     """
     resource = "fund_eastmoney"
-    table_name = "fund_portfolio_hold"
+    table = "fund_portfolio_hold"
 
     def __init__(self, tasks: List[Dict] = None, update: bool = False):
         super().__init__(tasks, update)
@@ -95,58 +95,28 @@ class FundPortfolioHoldEmSpider(BaseSpider):
     def check(self):
         # 先执行父类检查（可能会处理 update 标志等基础逻辑）
         super().check()
-        # 1. 收集所有待处理的 symbol
-        symbols = [task['symbol'] for task in self.tasks]
-        # 2. 构建 SQL 批量查询，获取每个 symbol 的最新日期
-        # 使用 IN 子句批量检索
-        in_clause = "', '".join(symbols)
-        sql = f"""
-            SELECT symbol, MAX(date) as date
-            FROM {self.table_name}
-            WHERE symbol IN ('{in_clause}')
-            GROUP BY symbol
-        """
         try:
-            # 查询数据库
-            df = load_dataframe(sql, db=self.market)
-            if df.empty:
-                # 表为空或无匹配记录，无需过滤
-                return
-            # 3. 计算三个月前的时间点
+            # 计算三个月前的时间点
             # 使用 pd.DateOffset 处理月份跨度，确保逻辑准确
-            three_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=3)
-            df['date'] = pd.to_datetime(df['date'])
-            # 4. 筛选出需要过滤的 symbol
-            # 条件：最新日期 >= 三个月前（即距离今日不超过三个月）
-            recent_symbols = set(
-                df[df['date'] >= three_months_ago]['symbol']
-            )
-            if recent_symbols:
-                # 过滤任务：保留 symbol 不在 recent_symbols 中的任务
-                self.tasks = [t for t in self.tasks if t.get("symbol") not in recent_symbols]
-                logger.info(f"过滤掉最近3个月已更新的 {len(recent_symbols)} 只基金，剩余 {len(self.tasks)} 个任务")
+            new_tasks = []
+            for task in self.tasks:
+                three_months_ago = pd.Timestamp.now().date() - pd.DateOffset(months=3)
+                if task["start_date"]<=three_months_ago:
+                    new_tasks.append(task)
+            self.tasks = new_tasks
+            logger.info(f"过滤掉最近3个月已更新的基金持仓数据，剩余 {len(self.tasks)} 个任务")
         except Exception as e:
-            error_msg = str(e).lower()
-            # 表不存在是正常情况（首次运行），使用 INFO 级别日志
-            if "does not exist" in error_msg:
-                logger.info(f"Table {self.table_name} 尚未初始化，跳过增量检查")
-            else:
-                logger.error(f"检查基金持仓数据更新状态失败: {e}")
+            logger.error(f"检查基金持仓数据更新状态失败: {e}")
     # ---------- run ----------
     async def run(self):
         """
         参数 progress 和 task_id 保留以兼容调度器调用，但内部不再使用，改用 logger.info 输出进度。
         """
-        if not self.tasks:
-            logger.info("没有任务需要执行。")
-            return
-
         total = len(self.tasks)
         logger.info(f"{self.__class__.__name__}: 开始处理 {total} 个任务")
 
         # 控制并发年份数，避免对同一基金接口造成过大压力
         semaphore = asyncio.Semaphore(3)
-
         for idx, task in enumerate(self.tasks, 1):
             if idx%10==0:
                 logger.info(f"{self.__class__.__name__} [{idx}/{total}] 正在处理 {task['symbol']}")
@@ -188,9 +158,9 @@ class FundPortfolioHoldEmSpider(BaseSpider):
                     try:
                         save_dataframe(
                             df,
-                            table_name=self.table_name,
+                            table=self.table,
                             db=self.market,
-                            primary_key=["symbol", "date", "stock_id"]
+                            primary_key=["stock_id", "symbol", "date"]
                         )
                         logger.info(f"基金 {symbol} {year} 年持仓数据已保存，共 {len(df)} 条")
                         return True

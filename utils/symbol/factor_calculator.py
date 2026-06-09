@@ -311,9 +311,9 @@ class FactorCalculator:
 
     def save_factor(self, name: str, series: pd.Series) -> str:
         """保存单个因子结果为 parquet + config"""
-        table_name = f"{self.market_type}_{name}"
-        save_dataframe(series.to_frame(name), table_name, self.factor_results_dir)
-        return os.path.join(self.factor_results_dir, f"{table_name}.parquet")
+        table = f"{self.market_type}_{name}"
+        save_dataframe(series.to_frame(name), table, self.factor_results_dir)
+        return os.path.join(self.factor_results_dir, f"{table}.parquet")
 
     def _execute_factor(self, name: str, df: pd.DataFrame) -> pd.Series:
         """执行单个因子"""

@@ -1,74 +1,58 @@
-import os
-import duckdb
+﻿import os
 import logging
 from typing import Dict, Any
 from fastapi import HTTPException
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.storage import load_dataframe
-from core.config import DATA_PATH
+from core.storage import load_dataframe, loadTable, dropTable
 
 logger = logging.getLogger(__name__)
 
-def get_db_identifier(task_name: str, scheduler_instance) -> str:
-    """
-    根据任务名获取数据库标识符。
-    严禁将变量命名为 market。
-    """
+
+def get_db_name(task_name: str, scheduler) -> str:
     if task_name == "Init":
-        return "system"
-    task = scheduler_instance.get_task(task_name)
+        raise ValueError("Init task has no market db")
+    task = scheduler.get_task(task_name)
     if not task:
-        return "unknown"
+        raise ValueError(f"Task not found: {task_name}")
+
     module = task.metadata.get("module", "")
     parts = module.split(".")
-    if len(parts) >= 2:
-        identifier = parts[1]
-        # 关键修复：只返回有效的市场标识符
-        # 有效标识符：小写字母+数字，长度2-20，排除内部变量名
-        if (identifier and 
-            identifier.isalnum() and 
-            identifier.islower() and 
-            2 <= len(identifier) <= 20 and
-            identifier not in ("reqid", "req_id", "requestid", "unknown", "system")):
-            return identifier
-    return "unknown"
+    if len(parts) < 2:
+        raise ValueError(f"Invalid task module path: {module}")
 
-def get_task_logs(task_name: str, scheduler_instance) -> Dict[str, Any]:
-    """读取指定任务的日志"""
-    db_identifier = get_db_identifier(task_name, scheduler_instance)
-    if db_identifier in ("system", "unknown"):
-        if db_identifier == "system":
-            return { "logs": [], "error": "System task logs are not stored in the standard log DB." }
-        else:
-            return { "logs": [], "error": f"Unknown task or invalid module path for {task_name}" }
-    
-    db_name = f"{db_identifier}_logs"
-    sql = f'SELECT * FROM "{task_name}" ORDER BY date DESC LIMIT 1000'
+    db_name = parts[1]
+    if not db_name or not db_name.isalnum() or not db_name.islower() or not (2 <= len(db_name) <= 20):
+        raise ValueError(f"Invalid db name in module path: {module}")
+
+    return db_name
+
+
+def get_task_logs(task_name: str, scheduler) -> Dict[str, Any]:
+    get_db_name(task_name, scheduler)
+
+    sql = loadTable("*", task_name, "logs", "order by date desc limit 1000")
+    if not sql:
+        return {"logs": []}
+
     try:
-        df = load_dataframe(sql, db=db_name)
-        return { "logs": df.to_dict(orient="records")}
+        df = load_dataframe(sql, "logs")
+        return {"logs": df.to_dict(orient="records")}
     except Exception as e:
         logger.error(f"Failed to load logs for {task_name}: {e}")
-        return { "logs": [], "error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
-def clear_task_logs(task_name: str, scheduler_instance) -> Dict[str, str]:
-    """清理指定任务的日志"""
-    db_identifier = get_db_identifier(task_name, scheduler_instance)
-    if db_identifier in ("system", "unknown"):
-        return { "message": "System or unknown tasks do not support log clearing via this endpoint." }
-    
-    db_name = f"{db_identifier}_logs"
-    db_path = os.path.join(DATA_PATH, f"{db_name}.duckdb")
-    if not os.path.exists(db_path):
-        return { "message": "Log database does not exist." }
+
+def clear_task_logs(task_name: str, scheduler) -> Dict[str, Any]:
+    get_db_name(task_name, scheduler)
+
     try:
-        con = duckdb.connect(db_path)
-        con.execute(f'DELETE FROM "{task_name}"')
-        con.close()
+        deleted = dropTable("logs", task_name)
+        if not deleted:
+            return {"ok": True, "message": f"No log table for {task_name}", "deleted": False}
         logger.info(f"Cleared logs for {task_name}")
-        return { "message": f"Logs cleared for {task_name}" }
+        return {"ok": True, "message": f"Logs cleared for {task_name}", "deleted": True}
     except Exception as e:
         logger.error(f"Failed to clear logs: {e}")
         raise HTTPException(status_code=500, detail=str(e))

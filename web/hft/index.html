@@ -1,26 +1,34 @@
-<div id="view-kline" class="h-full">
+<div id="view-hft" class="h-full">
     <div class="kline-controls">
         <div class="kline-controls-grid kline-controls-grid-compact">
             <div class="form-group form-group-tight">
                 <label>市场</label>
-                <select id="kline-market" onchange="onMarketChange()">
+                <select id="hft-market" onchange="onHftMarketChange()">
                     <option value="">选择市场</option>
                 </select>
             </div>
             <div class="form-group form-group-tight">
                 <label>周期</label>
-                <select id="kline-interval" disabled onchange="onIntervalChange()">
+                <select id="hft-interval" disabled onchange="onHftIntervalChange()">
                     <option value="">请先选择市场</option>
                 </select>
             </div>
             <div class="form-group form-group-tight">
                 <label>代码</label>
-                <input type="text" id="kline-symbol-manual" list="symbol-list" placeholder="输入代码" disabled autocomplete="off">
-                <datalist id="symbol-list"></datalist>
+                <input type="text" id="hft-symbol-manual" list="hft-symbol-list" placeholder="输入代码" disabled autocomplete="off">
+                <datalist id="hft-symbol-list"></datalist>
+            </div>
+            <div class="form-group form-group-tight">
+                <label>类型</label>
+                <select id="hft-bar-mode" onchange="onHftModeChange()"></select>
+            </div>
+            <div class="form-group form-group-tight" id="hft-threshold-group" style="display:none;">
+                <label>阈值</label>
+                <input type="number" id="hft-threshold" step="any">
             </div>
             <div class="form-group form-group-tight">
                 <label>复权</label>
-                <select id="kline-adj" onchange="loadKline()">
+                <select id="hft-adj" onchange="loadHft()">
                     <option value="none">不复权</option>
                     <option value="qfq">前复权</option>
                     <option value="hfq">后复权</option>
@@ -28,22 +36,22 @@
             </div>
             <div class="form-group form-group-tight">
                 <label>范围</label>
-                <select id="kline-range" onchange="loadKline('', true)">
+                <select id="hft-range" onchange="loadHft('', true)">
                     <option value="1w">最近一周</option>
                     <option value="1m" selected>最近一月</option>
                     <option value="1y">最近一年</option>
                     <option value="all">全部</option>
                 </select>
             </div>
-            <div class="form-group form-group-tight kline-date-group">
+            <div class="form-group form-group-tight hft-date-group">
                 <label>日期</label>
                 <div class="kline-date-grid">
-                    <input type="date" id="kline-start-date" onchange="loadKline('', false)">
-                    <input type="date" id="kline-end-date" onchange="loadKline('', false)">
+                    <input type="date" id="hft-start-date" onchange="loadHft('', false)">
+                    <input type="date" id="hft-end-date" onchange="loadHft('', false)">
                 </div>
             </div>
             <div class="form-group form-group-tight kline-action-group">
-                <button class="btn-primary btn-fill" onclick="loadKlineFromInput()" id="btn-load-kline" disabled>查看</button>
+                <button class="btn-primary btn-fill" onclick="loadHftFromInput()" id="btn-load-hft" disabled>查看</button>
             </div>
         </div>
     </div>
@@ -53,14 +61,16 @@
             <div class="symbol-list-controls">
                 <div style="font-weight:700; margin-bottom:8px;">市场概览</div>
                 <div style="display:flex; gap:8px;">
-                    <button class="btn-xs active" data-label="代码" onclick="sortSymbols('symbol', this)">代码</button>
-                    <button class="btn-xs" data-label="日内涨跌幅" onclick="sortSymbols('pct_change', this)">日内涨跌幅</button>
+                    <button class="btn-xs active" onclick="sortHftSymbols(this)">代码</button>
                 </div>
             </div>
-            <div class="symbol-grid" id="symbol-grid-container"></div>
+            <div class="symbol-grid" id="hft-symbol-grid-container"></div>
         </div>
         <div class="kline-container">
-            <div class="kline-chart-box" id="kline-chart-area"></div>
+            <div class="hft-canvas-wrap">
+                <canvas id="hft-canvas" class="hft-canvas"></canvas>
+                <div id="hft-tooltip" class="hft-tooltip"></div>
+            </div>
         </div>
     </div>
 </div>

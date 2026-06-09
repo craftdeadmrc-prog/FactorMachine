@@ -14,7 +14,7 @@ if __name__ == "__main__":
     # ----------------------
     HOST = "0.0.0.0"  # 监听所有网络接口
     PORT = 8000       # 端口号
-    RELOAD = True     # 开发模式下开启热重载（生产环境建议设为 False）
+    RELOAD = False     # 开发模式下开启热重载（生产环境建议设为 False）
 
     print("-" * 50)
     print(f"FactorMachine Web Panel Starting...")

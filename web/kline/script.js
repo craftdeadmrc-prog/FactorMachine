@@ -1,565 +1,385 @@
-// web/kline/script.js
-// Kline Logic - Reverse chunk loading with correct time axis
-let klineChart = null;
-let allOverviewData = [];
-let renderedCount = 0;
-const PAGE_SIZE = 100;
-let fullKlineData = [];
-let currentSortKey = 'symbol';
-let currentSymbol = '';
+var klineChart = null;
+var allOverviewData = [];
+var renderedCount = 0;
+var currentSymbol = '';
+var currentKlineSortKey = 'symbol';
+var currentKlineSortDirection = 'asc';
+var activeLoadToken = 0;
+var klineResizeObserver = null;
 
-let _renderTimer = null;
-let _renderQueue = [];
-// 优化：增加渲染延迟，减少批量渲染时的主线程阻塞
-const RENDER_DELAY = 150;
-// 优化：每次只渲染一块数据，避免批量更新卡顿
-const BATCH_SIZE = 1;
+var klineQuery = {
+    market: '',
+    symbol: '',
+    interval: '',
+    adj: 'none',
+    start_date: null,
+    end_date: null
+};
 
-// 全局数据缓存 - 只声明一次
-let currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
+function toYmd(value) {
+    var year = value.getFullYear();
+    var month = String(value.getMonth() + 1).padStart(2, '0');
+    var day = String(value.getDate()).padStart(2, '0');
+    return year + '-' + month + '-' + day;
+}
+
+function isCompleteKlineDate(value) {
+    var text = String(value || '').trim();
+    if (!text) return true;
+    var match = text.match(/^([1|2]\d{3})-(\d{2})-(\d{2})$/);
+    if (!match) return false;
+
+    var date = new Date(text + 'T00:00:00');
+    return !Number.isNaN(date.getTime())
+        && date.getFullYear() === Number(match[1])
+        && date.getMonth() + 1 === Number(match[2])
+        && date.getDate() === Number(match[3]);
+}
+
+function hasCompleteKlineDateRange() {
+    var startInput = document.getElementById('kline-start-date');
+    var endInput = document.getElementById('kline-end-date');
+    if (startInput?.validity?.badInput || endInput?.validity?.badInput) return false;
+    return isCompleteKlineDate(startInput?.value) && isCompleteKlineDate(endInput?.value);
+}
+
+function applyPresetRange(preset) {
+    var startInput = document.getElementById('kline-start-date');
+    var endInput = document.getElementById('kline-end-date');
+    if (!startInput || !endInput) return;
+
+    var end = new Date();
+    var start = null;
+    if (preset === '1w') start = new Date(end.getFullYear(), end.getMonth(), end.getDate() - 7);
+    if (preset === '1m') start = new Date(end.getFullYear(), end.getMonth(), end.getDate() - 30);
+    if (preset === '1y') start = new Date(end.getFullYear() - 1, end.getMonth(), end.getDate());
+
+    startInput.value = start ? toYmd(start) : '';
+    endInput.value = toYmd(end);
+}
+
+function parseIntervalToPeriod(interval) {
+    var text = String(interval || '').toLowerCase();
+    var match = text.match(/^(\d+)([a-z]+)$/);
+    if (!match) return { type: 'day', span: 1 };
+
+    var span = Number(match[1]);
+    var unit = match[2];
+    if (unit === 'm' || unit === 'min' || unit === 'minute') return { type: 'minute', span: span };
+    if (unit === 'h' || unit === 'hour') return { type: 'hour', span: span };
+    return { type: 'day', span: span };
+}
+
+function mapRowsToKline(rows) {
+    return rows.map(function(item) {
+        var dateText = String(item.date || '').trim().replace(/\./g, '-').replace(' ', 'T');
+        var timestamp = Date.parse(dateText);
+        return {
+            timestamp: timestamp,
+            open: Number(item.open),
+            high: Number(item.high),
+            low: Number(item.low),
+            close: Number(item.close),
+            volume: Number(item.volume || 0)
+        };
+    }).filter(function(item) {
+        return Number.isFinite(item.timestamp) && Number.isFinite(item.open) && Number.isFinite(item.high) && Number.isFinite(item.low) && Number.isFinite(item.close);
+    });
+}
+
+function updateKlineQuery(symbol, fromPreset) {
+    var rangeSelect = document.getElementById('kline-range');
+    if (fromPreset === true && rangeSelect) applyPresetRange(rangeSelect.value || '1m');
+
+    klineQuery.market = document.getElementById('kline-market')?.value || '';
+    klineQuery.interval = document.getElementById('kline-interval')?.value || '';
+    klineQuery.symbol = symbol || currentSymbol || (document.getElementById('kline-symbol-manual')?.value || '').trim();
+    klineQuery.adj = document.getElementById('kline-adj')?.value || 'none';
+    klineQuery.start_date = document.getElementById('kline-start-date')?.value || null;
+    klineQuery.end_date = document.getElementById('kline-end-date')?.value || null;
+}
+
+async function getBarsFromServer() {
+    if (!klineQuery.market || !klineQuery.interval || !klineQuery.symbol) return [];
+    if (!isCompleteKlineDate(klineQuery.start_date) || !isCompleteKlineDate(klineQuery.end_date)) return [];
+    var params = {
+        market: klineQuery.market,
+        interval: klineQuery.interval,
+        symbol: klineQuery.symbol,
+        adj: klineQuery.adj,
+        start_date: klineQuery.start_date,
+        end_date: klineQuery.end_date
+    };
+    var result = await WSAPI.call('kline.data', params);
+    var rows = Array.isArray(result?.data) ? result.data : (Array.isArray(result) ? result : []);
+    return mapRowsToKline(rows).sort(function(a, b) { return a.timestamp - b.timestamp; });
+}
+
+function bindKlineResize() {
+    var chartDom = document.getElementById('kline-chart-area');
+    if (!chartDom || !klineChart) return;
+    if (klineResizeObserver) klineResizeObserver.disconnect();
+    klineResizeObserver = new ResizeObserver(function() {
+        if (klineChart && typeof klineChart.resize === 'function') klineChart.resize();
+    });
+    klineResizeObserver.observe(chartDom);
+}
 
 function init_kline() {
-    const chartDom = document.getElementById('kline-chart-area');
-    if (chartDom && typeof echarts !== 'undefined') {
-        if (klineChart) {
-            klineChart.dispose();
+    activeLoadToken++;
+    var chartDom = document.getElementById('kline-chart-area');
+    if (!chartDom || !window.klinecharts) return;
+
+    if (klineChart && typeof klineChart.dispose === 'function') klineChart.dispose();
+    klineChart = klinecharts.init('kline-chart-area');
+    klineChart.createIndicator('VOL', false);
+    bindKlineResize();
+
+    klineChart.setDataLoader({
+        getBars: async function(loaderParams) {
+            var token = activeLoadToken;
+            var list = await getBarsFromServer();
+            if (token !== activeLoadToken) return;
+            loaderParams.callback(list, false);
         }
-        klineChart = echarts.init(chartDom);
-        window.addEventListener('resize', () => klineChart && klineChart.resize());
-    } else {
-        console.error("ECharts load failed");
-    }
+    });
+
     populateMarkets();
-    const container = document.getElementById('symbol-grid-container');
+
+    var rangeSelect = document.getElementById('kline-range');
+    if (rangeSelect) {
+        rangeSelect.value = '1m';
+        applyPresetRange('1m');
+    }
+
+    var container = document.getElementById('symbol-grid-container');
     if (container) {
-        container.addEventListener('scroll', () => {
-            if (container.scrollTop + container.clientHeight >= container.scrollHeight - 20) {
-                loadMoreSymbols();
-            }
+        container.addEventListener('scroll', function() {
+            if (container.scrollTop + container.clientHeight >= container.scrollHeight - 20) loadMoreSymbols();
         });
     }
+}
+
+function destroy_kline() {
+    activeLoadToken++;
+    if (klineResizeObserver) {
+        klineResizeObserver.disconnect();
+        klineResizeObserver = null;
+    }
+    if (klineChart && typeof klineChart.dispose === 'function') klineChart.dispose();
+    klineChart = null;
 }
 
 async function populateMarkets() {
-    try {
-        const data = await WSAPI.get('/tasks');
-        const markets = Object.keys(data).filter(k => {
-            return k && typeof k === 'string' && k.trim() && !k.startsWith('_') && k !== 'System';
-        });
-        const select = document.getElementById('kline-market');
-        if (!select) return;
-        select.innerHTML = '<option>选择市场</option>';
-        markets.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = m;
-            opt.innerText = m.toUpperCase();
-            select.appendChild(opt);
-        });
-    } catch (e) {
-        console.error("Failed to load markets", e);
-    }
+    var data = await WSAPI.call('tasks.get');
+    var markets = Object.keys(data).filter(function(item) { return item && item !== 'System'; });
+    var select = document.getElementById('kline-market');
+    if (!select) return;
+    select.innerHTML = '<option value="">选择市场</option>';
+    markets.forEach(function(item) {
+        var option = document.createElement('option');
+        option.value = item;
+        option.innerText = item.toUpperCase();
+        select.appendChild(option);
+    });
 }
 
 async function onMarketChange() {
-    const market = document.getElementById('kline-market').value;
-    const intervalSelect = document.getElementById('kline-interval');
-    const symbolInput = document.getElementById('kline-symbol-manual');
-    const loadBtn = document.getElementById('btn-load-kline');
-    const symbolList = document.getElementById('symbol-list');
-    
+    var token = ++activeLoadToken;
+    var market = document.getElementById('kline-market').value;
+    var intervalSelect = document.getElementById('kline-interval');
+    var symbolInput = document.getElementById('kline-symbol-manual');
+    var loadButton = document.getElementById('btn-load-kline');
+    var symbolList = document.getElementById('symbol-list');
+
     if (intervalSelect) {
-        intervalSelect.innerHTML = '加载中...';
+        intervalSelect.innerHTML = '<option value="">加载中...</option>';
         intervalSelect.disabled = true;
     }
-    if (symbolInput) symbolInput.disabled = true;
-    if (loadBtn) loadBtn.disabled = true;
-    if (symbolInput) symbolInput.value = '';
+    if (symbolInput) {
+        symbolInput.disabled = true;
+        symbolInput.value = '';
+    }
+    if (loadButton) loadButton.disabled = true;
     if (symbolList) symbolList.innerHTML = '';
-    
+
     allOverviewData = [];
-    renderedCount = 0; 
-    const container = document.getElementById('symbol-grid-container');
+    renderedCount = 0;
+    var container = document.getElementById('symbol-grid-container');
     if (container) container.innerHTML = '';
-    
     if (!market) return;
-    
-    try {
-        const tables = await WSAPI.get('/kline/tables', { market: market });
-        if (!Array.isArray(tables)) {
-            console.error('tables is not an array:', tables);
-            if (intervalSelect) intervalSelect.innerHTML = '<option>数据格式错误</option>';
+
+    var tables = await WSAPI.call('kline.tables', { market: market });
+    if (token !== activeLoadToken) return;
+
+    if (!Array.isArray(tables)) {
+        if (intervalSelect) intervalSelect.innerHTML = '<option value="">数据格式错误</option>';
+        return;
+    }
+
+    if (intervalSelect) {
+        intervalSelect.innerHTML = '';
+        if (tables.length === 0) {
+            intervalSelect.innerHTML = '<option value="">该市场无K线数据</option>';
             return;
         }
-        if (intervalSelect) {
-            intervalSelect.innerHTML = '';
-            if (tables.length === 0) {
-                intervalSelect.innerHTML = '<option>该市场无K线数据</option>';
-                return;
-            }
-            tables.forEach(t => {
-                const opt = document.createElement('option');
-                opt.value = t.interval;
-                opt.innerText = t.interval.toUpperCase();
-                intervalSelect.appendChild(opt);
-            });
-            intervalSelect.disabled = false;
+        tables.filter(function(item) { return item.interval !== '1t'; }).forEach(function(item) {
+            var option = document.createElement('option');
+            option.value = item.interval;
+            option.innerText = item.interval.toUpperCase();
+            intervalSelect.appendChild(option);
+        });
+        if (!intervalSelect.options.length) {
+            intervalSelect.innerHTML = '<option value="">无可用周期</option>';
+            return;
         }
-        if (symbolInput) symbolInput.disabled = false;
-        if (loadBtn) loadBtn.disabled = false;
-        
-        const symbols = await WSAPI.get('/kline/symbols', { market: market });
-        if (symbolList && Array.isArray(symbols) && symbols.length > 0) {
-            symbols.forEach(s => {
-                const opt = document.createElement('option');
-                opt.value = s;
-                symbolList.appendChild(opt);
-            });
-        }
-        await loadOverview();
-    } catch (e) {
-        console.error(e);
-        if (intervalSelect) intervalSelect.innerHTML = '<option>加载失败</option>';
+        intervalSelect.disabled = false;
     }
+
+    if (symbolInput) symbolInput.disabled = false;
+    if (loadButton) loadButton.disabled = false;
+
+    var symbols = await WSAPI.call('kline.symbols', { market: market });
+    if (token !== activeLoadToken) return;
+
+    if (symbolList && Array.isArray(symbols)) {
+        symbols.forEach(function(item) {
+            var option = document.createElement('option');
+            option.value = item;
+            symbolList.appendChild(option);
+        });
+    }
+
+    await loadOverview();
 }
 
 async function onIntervalChange() {
+    activeLoadToken++;
     await loadOverview();
 }
 
 async function loadOverview() {
-    const market = document.getElementById('kline-market').value;
-    const interval = document.getElementById('kline-interval').value;
+    var token = activeLoadToken;
+    var market = document.getElementById('kline-market').value;
+    var interval = document.getElementById('kline-interval').value;
     if (!market || !interval) return;
-    
+
     allOverviewData = [];
     renderedCount = 0;
-    const container = document.getElementById('symbol-grid-container');
+    var container = document.getElementById('symbol-grid-container');
     if (container) container.innerHTML = '加载中...';
-    
-    try {
-        const data = await WSAPI.get('/kline/overview', { market, interval });
-        if (Array.isArray(data) && data.length > 0) {
-            allOverviewData = data;
-            sortSymbols(currentSortKey, null, false);
-        } else {
-            if (container) container.innerHTML = '<div style="color:#999">无数据</div>';
-        }
-    } catch (e) {
-        console.error("Load overview failed", e);
-        if (container) container.innerHTML = '<div style="color:red">加载失败</div>';
-    }
+
+    allOverviewData = await WSAPI.call('kline.overview', { market: market, interval: interval });
+    if (token !== activeLoadToken) return;
+    if (!container) return;
+
+    if (allOverviewData.length) sortSymbols(currentKlineSortKey, null);
+    else container.innerHTML = '<div style="color:#667085">无数据</div>';
 }
 
-function sortSymbols(key, btnElement, needReload) {
-    currentSortKey = key;
-    if (btnElement) {
-        const btns = document.querySelectorAll('.symbol-list-controls .btn-xs');
-        btns.forEach(b => b.classList.remove('active'));
-        btnElement.classList.add('active');
+function sortSymbols(sortKey, buttonElement) {
+    var nextSortKey = sortKey || currentKlineSortKey || 'symbol';
+    if (buttonElement && nextSortKey === currentKlineSortKey) {
+        currentKlineSortDirection = currentKlineSortDirection === 'asc' ? 'desc' : 'asc';
+    } else if (nextSortKey !== currentKlineSortKey) {
+        currentKlineSortDirection = nextSortKey === 'pct_change' ? 'desc' : 'asc';
     }
-    if (key === 'pct_change') {
-        allOverviewData.sort((a, b) => (b.pct_change || -999) - (a.pct_change || -999));
-    } else {
-        allOverviewData.sort((a, b) => (a.symbol || '').localeCompare(b.symbol || ''));
+    currentKlineSortKey = nextSortKey;
+    if (buttonElement) {
+        var buttons = document.querySelectorAll('.symbol-list-controls .btn-xs');
+        buttons.forEach(function(item) { item.classList.remove('active'); });
+        buttonElement.classList.add('active');
     }
+
+    allOverviewData.sort(function(a, b) {
+        var result = 0;
+        if (currentKlineSortKey === 'pct_change') {
+            var left = Number(a.pct_change);
+            var right = Number(b.pct_change);
+            var leftValid = Number.isFinite(left);
+            var rightValid = Number.isFinite(right);
+            if (leftValid && rightValid && right !== left) result = left - right;
+            else if (leftValid !== rightValid) result = leftValid ? -1 : 1;
+        }
+        if (result === 0) result = (a.symbol || '').localeCompare(b.symbol || '');
+        return currentKlineSortDirection === 'desc' ? -result : result;
+    });
+
     renderedCount = 0;
-    const container = document.getElementById('symbol-grid-container');
+    var container = document.getElementById('symbol-grid-container');
     if (container) container.innerHTML = '';
     loadMoreSymbols();
 }
 
 function loadMoreSymbols() {
-    const container = document.getElementById('symbol-grid-container');
+    var container = document.getElementById('symbol-grid-container');
     if (!container) return;
-    const fragment = document.createDocumentFragment();
-    const start = renderedCount;
-    const end = Math.min(start + PAGE_SIZE, allOverviewData.length);
+
+    var fragment = document.createDocumentFragment();
+    var start = renderedCount;
+    var end = Math.min(start + 100, allOverviewData.length);
     if (start >= end) return;
-    
-    for (let i = start; i < end; i++) {
-        const item = allOverviewData[i];
-        const card = document.createElement('div');
+
+    for (var index = start; index < end; index++) {
+        var item = allOverviewData[index];
+        var card = document.createElement('div');
         card.className = 'symbol-card';
         if (item.symbol === currentSymbol) card.classList.add('selected');
-        const hasPrice = item.close !== null && item.close !== undefined;
-        const pct = item.pct_change || 0;
-        const isUp = pct >= 0;
-        const colorClass = isUp ? 'up' : 'down';
-        const bgClass = isUp ? 'bg-up' : 'bg-down';
-        let priceHtml = '-';
-        if (hasPrice) {
-            priceHtml = `<span class="price ${colorClass}">${item.close.toFixed(2)}</span> <span class="pct ${bgClass} ${colorClass}">${isUp ? '+' : ''}${pct.toFixed(2)}%</span>`;
-        }
-        card.innerHTML = `<div class="name" title="${item.short_name || ''}">${item.short_name || '-'}</div> <div class="code">${item.symbol}</div> <div class="price-info">${priceHtml}</div>`;
-        card.onclick = () => {
-            currentSymbol = item.symbol;
-            container.querySelectorAll('.symbol-card').forEach(c => c.classList.remove('selected'));
-            card.classList.add('selected');
-            const input = document.getElementById('kline-symbol-manual');
-            if (input) input.value = item.symbol;
-            loadKline(item.symbol);
-        };
+
+        var close = Number(item.close);
+        var pct = Number(item.pct_change);
+        var priceText = Number.isFinite(close) ? close.toFixed(Math.abs(close) >= 1 ? 2 : 6) : '-';
+        var pctText = Number.isFinite(pct) ? (pct > 0 ? '+' : '') + pct.toFixed(2) + '%' : '-';
+        var pctClass = Number.isFinite(pct) ? (pct > 0 ? 'up bg-up' : (pct < 0 ? 'down bg-down' : '')) : '';
+
+        card.innerHTML = '<div class="name" title="' + (item.short_name || '') + '">' + (item.short_name || '-') + '</div>'
+            + '<div class="code">' + (item.symbol || '') + '</div>'
+            + '<div class="price-info"><span class="price">' + priceText + '</span><span class="pct ' + pctClass + '">' + pctText + '</span></div>';
+        card.onclick = function(selectedItem, selectedCard) {
+            return function() {
+                currentSymbol = selectedItem.symbol;
+                container.querySelectorAll('.symbol-card').forEach(function(entry) { entry.classList.remove('selected'); });
+                selectedCard.classList.add('selected');
+                var input = document.getElementById('kline-symbol-manual');
+                if (input) input.value = selectedItem.symbol;
+                loadKline(selectedItem.symbol);
+            };
+        }(item, card);
+
         fragment.appendChild(card);
     }
+
     container.appendChild(fragment);
     renderedCount = end;
 }
 
-function onBarTypeChange() {
-    const barType = document.getElementById('kline-bar-type').value;
-    const thresholdGroup = document.getElementById('kline-threshold-group');
-    const thresholdInput = document.getElementById('kline-bar-threshold');
-    if (!thresholdGroup || !thresholdInput) return;
-    if (barType === 'time') {
-        thresholdGroup.style.display = 'none';
-    } else {
-        thresholdGroup.style.display = 'block';
-        if (barType === 'volume') {
-            thresholdInput.placeholder = "如 1000000";
-            thresholdInput.value = "1000000";
-            thresholdInput.step = "any";
-        } else if (barType === 'cusum') {
-            thresholdInput.placeholder = "如 0.02 (2%)";
-            thresholdInput.value = "0.02";
-            thresholdInput.step = "0.01";
-        }
-    }
+function loadKlineFromInput() {
+    var input = document.getElementById('kline-symbol-manual');
+    var symbol = input ? input.value.trim() : '';
+    if (!symbol) return;
+    currentSymbol = symbol;
+    loadKline(symbol);
 }
 
-async function loadKlineFromInput() {
-    const input = document.getElementById('kline-symbol-manual');
-    const symbol = input ? input.value.trim() : '';
-    if(symbol) {
-        currentSymbol = symbol;
-        loadKline(symbol);
-    }
-}
+async function loadKline(symbol, fromPreset) {
+    updateKlineQuery(symbol, fromPreset);
+    if (!hasCompleteKlineDateRange()) return;
+    if (!klineQuery.market || !klineQuery.interval || !klineQuery.symbol || !klineChart) return;
 
-async function loadKline(symbol) {
-    if(!symbol) return;
-    const marketEl = document.getElementById('kline-market');
-    const intervalEl = document.getElementById('kline-interval');
-    const rangeEl = document.getElementById('kline-range');
-    const adjEl = document.getElementById('kline-adj');
-    const barTypeEl = document.getElementById('kline-bar-type');
-    const thresholdEl = document.getElementById('kline-bar-threshold');
-    
-    const market = marketEl ? marketEl.value : '';
-    const interval = intervalEl ? intervalEl.value : '';
-    const rangeType = rangeEl ? rangeEl.value : '1m';
-    const adjType = adjEl ? adjEl.value : 'none';
-    const barType = barTypeEl ? barTypeEl.value : 'time';
-    const threshold = (barType !== 'time' && thresholdEl && thresholdEl.value) ? parseFloat(thresholdEl.value) : null;
-    
-    if (!market || !interval) return;
-    
-    if (!klineChart) {
-        init_kline();
-        if(!klineChart) return;
-    }
-
-    currentKlineData = { dates: [], ohlc: [], volumes: [], ticks: [] };
-    klineChart.clear();
-    initEmptyChart(symbol, barType);
-
-    // === 关键修复1：非time bar禁用分页 ===
-    const isTimeBar = barType === 'time';
-    const disablePagination = !isTimeBar;  // 特殊bar不分页
-    
-    let offset = 0;
-    const limit = disablePagination ? 1000000 : 250000;  // 特殊bar一次性加载100万条
-    let total = 0;
-    let loadedCount = 0;
-    let hasMore = true;
-    let isFirstRequest = true;
-    _renderQueue = [];
+    currentSymbol = klineQuery.symbol;
+    var token = ++activeLoadToken;
 
     try {
-        while (hasMore) {
-            // === 计算分页 offset ===
-            if (isTimeBar) {
-                if (isFirstRequest) {
-                    offset = 0;  // 第一请求获取 total
-                } else {
-                    // 倒序：从最新往最早加载
-                    offset = Math.max(0, total - loadedCount - limit);
-                }
-            } else {
-                // 特殊 bar：正序加载，从最早开始（但禁用分页，只请求一次）
-                offset = 0;
-            }
-            
-            const params = {
-                market: market, interval: interval, symbol: symbol,
-                range_type: rangeType, adj: adjType, bar_type: barType,
-                offset: offset, limit: limit
-            };
-            if (threshold !== null) params.bar_threshold = threshold;
-
-            const result = await WSAPI.get('/kline/data', params);
-            
-            if (result.error) throw new Error(result.error);
-            if (result.detail) throw new Error(result.detail);
-
-            if (!result.data || result.data.length === 0) {
-                if (loadedCount === 0) {
-                    klineChart.setOption({ 
-                        title: { text: '无数据', subtext: '数据库中未找到记录', left: 'center', top: 'center' } 
-                    });
-                }
-                break;
-            }
-
-            // === 第一请求后获取 total，time bar 重定向到最新块 ===
-            if (total === 0 && result.total) {
-                total = result.total;
-                
-                if (isTimeBar && isFirstRequest && total > limit) {
-                    const correctOffset = total - limit;
-                    if (correctOffset > 0 && correctOffset !== offset) {
-                        params.offset = correctOffset;
-                        const newResult = await WSAPI.get('/kline/data', params);
-                        if (newResult.data && newResult.data.length > 0) {
-                            result.data = newResult.data;
-                            result.total = newResult.total;
-                            offset = correctOffset;
-                        }
-                    }
-                }
-            }
-
-            isFirstRequest = false;
-
-            const newChunk = parseKlineData(result.data);
-
-            // === 拼接方向 + 优化：使用更高效的数组操作 ===
-            if (loadedCount === 0) {
-                // 第一块：直接赋值（使用slice避免引用）
-                currentKlineData.dates = newChunk.dates.slice();
-                currentKlineData.ohlc = newChunk.ohlc.slice();
-                currentKlineData.volumes = newChunk.volumes.slice();
-                currentKlineData.ticks = newChunk.ticks.slice();
-            } else if (isTimeBar) {
-                // time bar：新块是更早的数据，拼接到前面
-                // 优化：使用 unshift + spread 批量前置插入，比多次 concat 更高效
-                currentKlineData.dates.unshift(...newChunk.dates);
-                currentKlineData.ohlc.unshift(...newChunk.ohlc);
-                currentKlineData.volumes.unshift(...newChunk.volumes);
-                currentKlineData.ticks.unshift(...newChunk.ticks);
-            } else {
-                // 特殊 bar：拼接到后面
-                currentKlineData.dates.push(...newChunk.dates);
-                currentKlineData.ohlc.push(...newChunk.ohlc);
-                currentKlineData.volumes.push(...newChunk.volumes);
-                currentKlineData.ticks.push(...newChunk.ticks);
-            }
-
-            loadedCount += newChunk.dates.length;
-            _renderQueue.push({ chunk: newChunk, isFirst: loadedCount === newChunk.dates.length && loadedCount > 0 });
-
-            // 节流渲染 - 优化：更细粒度控制
-            if (_renderQueue.length >= BATCH_SIZE) {
-                await _flushRenderQueue();
-            }
-
-            // === 关键修复2：hasMore 判断 ===
-            if (disablePagination) {
-                // 特殊 bar：只加载一次
-                hasMore = false;
-            } else if (isTimeBar) {
-                // time bar: offset=0 或数据不足表示已加载完
-                if (offset <= 0 || result.data.length < limit) {
-                    hasMore = false;
-                }
-            } else {
-                // 备用逻辑（理论上不会执行）
-                if (result.more === false || result.data.length < limit) {
-                    hasMore = false;
-                }
-            }
-        }
-        await _flushRenderQueue();
-
-    } catch (e) {
-        console.error("Load kline failed", e);
-        alert("加载失败: " + e.message);
-        if (klineChart && currentKlineData.dates.length === 0) {
-            klineChart.clear();
-            klineChart.setOption({ 
-                title: { text: '加载错误', subtext: e.message, left: 'center', top: 'center' } 
-            });
-        }
+        klineChart.setSymbol({
+            ticker: klineQuery.symbol,
+            name: klineQuery.symbol,
+            shortName: klineQuery.symbol,
+            exchange: klineQuery.market
+        });
+        klineChart.setPeriod(parseIntervalToPeriod(klineQuery.interval));
+        klineChart.resetData();
+    } catch (error) {
+        if (token !== activeLoadToken) return;
+        alert('加载失败: ' + error.message);
     }
-}
-
-async function _flushRenderQueue() {
-    if (_renderTimer) {
-        return new Promise(resolve => setTimeout(resolve, RENDER_DELAY));
-    }
-    return new Promise(resolve => {
-        _renderTimer = setTimeout(() => {
-            while (_renderQueue.length) {
-                const { chunk, isFirst } = _renderQueue.shift();
-                _appendDataSilent(chunk, document.getElementById('kline-bar-type')?.value || 'time', isFirst);
-            }
-            _renderTimer = null;
-            resolve();
-        }, RENDER_DELAY);
-    });
-}
-
-function _appendDataSilent(newChunk, barType, isFirstChunk) {
-    const seriesData = barType === 'time' ? currentKlineData.volumes : currentKlineData.ticks;
-    
-    const totalPoints = currentKlineData.dates.length;
-    
-    // 修复：xAxis 必须包含完整配置项，避免 axis undefined 错误
-    const xAxisConfig = [
-        { 
-            type: 'category', 
-            data: currentKlineData.dates, 
-            boundaryGap: false, 
-            axisLine: { onZero: false }, 
-            splitLine: { show: false }, 
-            min: 'dataMin', 
-            max: 'dataMax',
-            axisLabel: { show: true }
-        },
-        { 
-            type: 'category', 
-            gridIndex: 1, 
-            data: currentKlineData.dates, 
-            boundaryGap: false, 
-            axisLine: { onZero: false }, 
-            axisTick: { show: false }, 
-            splitLine: { show: false }, 
-            axisLabel: { show: false },
-            min: 'dataMin', 
-            max: 'dataMax' 
-        }
-    ];
-    
-    // 构建 option 基础配置（xAxis 和 series 必须每次都传）
-    const option = {
-        xAxis: xAxisConfig,
-        series: [
-            { data: currentKlineData.ohlc, silent: true, animation: false },
-            { data: seriesData, silent: true, animation: false }
-        ]
-    };
-    
-    // 🔑 关键修复：只在首次加载时设置 dataZoom 的 start/end
-    // 后续增量加载时不传 dataZoom，ECharts 会自动保持用户当前的缩放状态
-    if (isFirstChunk) {
-        const zoomStart = totalPoints <= 25000 ? 0 : 80;
-        const zoomEnd = 100;
-        option.dataZoom = [
-            { type: 'inside', xAxisIndex: [0, 1], start: zoomStart, end: zoomEnd, filterMode: 'weakFilter' },
-            { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: zoomStart, end: zoomEnd, filterMode: 'weakFilter' }
-        ];
-    }
-    // 非首次加载时，option 中不包含 dataZoom 字段，setOption 会保持现有缩放状态
-    
-    // 使用 lazyUpdate 减少重绘开销，notMerge: false 保证配置合并而非覆盖
-    klineChart.setOption(option, { notMerge: false, lazyUpdate: true });
-}
-
-
-function parseKlineData(rawData) {
-    const dates = [];
-    const ohlc = [];
-    const volumes = [];
-    const ticks = [];
-    rawData.forEach(item => {
-        dates.push(item.date);
-        ohlc.push([
-            parseFloat(item.open) || 0,
-            parseFloat(item.close) || 0,
-            parseFloat(item.low) || 0,
-            parseFloat(item.high) || 0
-        ]);
-        volumes.push(parseFloat(item.volume) || 0);
-        ticks.push(parseFloat(item.ticks) || 1);
-    });
-    return { dates, ohlc, volumes, ticks };
-}
-
-function initEmptyChart(symbol, barType) {
-    // 优化：提升性能参数阈值，启用采样优化
-    const performanceOpts = {
-        large: true,
-        largeThreshold: 100000,
-        progressive: 25000,        // 优化：提高渐进渲染阈值
-        progressiveThreshold: 100000,  // 优化：大数据量启用采样
-        progressiveChunkMode: 'mod', // 分块模式
-        
-        // 性能优化
-        animation: false,          // 关闭动画
-        hoverAnimation: false,     // 关闭悬停动画
-        silent: true,              // 静默模式（关闭交互）
-        sampling: 'lttb'          // 优化：添加 LTTB 降采样算法
-    };
-    
-    // 修复：xAxis 配置必须完整，两个坐标轴都要有 type: 'category'
-    const xAxisConfig = [
-        // 主坐标轴：显示日期
-        { 
-            type: 'category', 
-            data: [], 
-            boundaryGap: false, 
-            axisLine: { onZero: false }, 
-            splitLine: { show: false }, 
-            min: 'dataMin', 
-            max: 'dataMax',
-            axisLabel: { show: true }
-        },
-        // 副坐标轴：隐藏日期，避免重复
-        { 
-            type: 'category', 
-            gridIndex: 1, 
-            data: [], 
-            boundaryGap: false, 
-            axisLine: { onZero: false }, 
-            axisTick: { show: false }, 
-            splitLine: { show: false }, 
-            axisLabel: { show: false },
-            min: 'dataMin', 
-            max: 'dataMax' 
-        }
-    ];
-    
-    const option = {
-        title: { text: symbol.toUpperCase(), left: 'center' },
-        tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-        legend: { data: ['K线', barType === 'time' ? '成交量' : '时间消耗'], bottom: 10 },
-        axisPointer: { link: [{ xAxisIndex: 'all' }] },
-        grid: [
-            { left: '10%', right: '8%', top: '10%', height: '50%' },
-            { left: '10%', right: '8%', top: '70%', height: '15%' }
-        ],
-        xAxis: xAxisConfig,
-        yAxis: [
-            { scale: true, splitArea: { show: true } },
-            { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
-        ],
-        dataZoom: [
-            // 优化：添加 filterMode 减少缩放重绘
-            { type: 'inside', xAxisIndex: [0, 1], start: 80, end: 100, filterMode: 'weakFilter' },
-            { show: true, xAxisIndex: [0, 1], type: 'slider', bottom: '5%', start: 80, end: 100, filterMode: 'weakFilter' }
-        ],
-        series: [
-            {
-                name: 'K线', type: 'candlestick', data: [],
-                ...performanceOpts,
-                itemStyle: { color: '#ef5350', color0: '#26a69a', borderColor: '#ef5350', borderColor0: '#26a69a' }
-            },
-            {
-                name: barType === 'time' ? '成交量' : '时间消耗',
-                type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: [],
-                ...performanceOpts,
-                itemStyle: { color: barType === 'time' ? '#26a69a' : '#5470c6' }
-            }
-        ]
-    };
-    klineChart.setOption(option);
 }

@@ -18,7 +18,7 @@ function destroy_dashboard() {
 async function updateStatus() {
     try {
         // 纯WS传输，移除useWS参数
-        const data = await WSAPI.get('/status');
+        const data = await WSAPI.call('status.get');
         const grid = document.getElementById('status-grid');
         if (!grid) return;
         

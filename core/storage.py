@@ -1,76 +1,210 @@
-# core/storage.py
-import os
-import duckdb
-import pandas as pd
+﻿import pandas as pd
+import dolphindb as ddb
 import threading
-from .config import DATA_PATH
-os.makedirs(DATA_PATH, exist_ok=True)
-# 用于保护每个市场数据库文件创建表的锁
-_market_locks = {}
-def _get_lock(market: str) -> threading.Lock:
+from .config import DB_CONFIG
+_db_locks = {}
+def _get_lock(db: str) -> threading.Lock:
     """获取指定市场的锁（每个市场独立）"""
-    if market not in _market_locks:
-        _market_locks[market] = threading.Lock()
-    return _market_locks[market]
-def _get_db_path(market: str) -> str:
-    """获取市场对应的DuckDB文件路径"""
-    return os.path.join(DATA_PATH, f"{market}.duckdb")
-def save_dataframe(df: pd.DataFrame, table_name: str, db: str, primary_key: list = None):
+    if db not in _db_locks:
+        _db_locks[db] = threading.Lock()
+    return _db_locks[db]
+
+def _connect_dolphindb(db: str) -> ddb.session:
+    db_config = DB_CONFIG[db]
+    con = ddb.session()
+    ok = con.connect(
+        db_config["host"],
+        int(db_config["port"]),
+        db_config["user"],
+        db_config["password"],
+    )
+    if not ok:
+        raise RuntimeError("Failed to connect DolphinDB")
+    return con
+
+def _dolphindb_type(dtype: pd.api.extensions.ExtensionDtype) -> str:
+    dtype_str = str(dtype)
+    if "datetime" in dtype_str:
+        return "NANOTIMESTAMP"
+    if "int" in dtype_str:
+        return "LONG"
+    if "float" in dtype_str:
+        return "DOUBLE"
+    if "bool" in dtype_str:
+        return "BOOL"
+    return "STRING"
+
+
+def save_dataframe(df: pd.DataFrame, table: str, db: str, freq: str = "day", primary_key: list = None):
     """
-    将DataFrame写入指定市场的指定表。
-    如果表不存在则自动创建，数据类型根据df的dtype映射。
-    如果提供primary_key，则创建主键约束。
-    插入数据时使用INSERT OR IGNORE，以忽略主键冲突。
-    多线程安全：使用按市场的锁保护表的创建。
-    更新: 启用 DuckDB 的 wal_autocheckpoint 功能，当 WAL 日志达到一定大小时自动更新数据库文件（更新权重）。
+    将 DataFrame 写入指定市场的指定表。
+    数据库与表不存在时按 freq 对应模板初始化后写入。
     """
     if df is None or df.empty:
         return
-    lock = _get_lock(db)
-    with lock:  # 确保同一市场内创建表的操作是串行的
-        db_path = _get_db_path(db)
-        con = duckdb.connect(db_path,config=dict(wal_autocheckpoint="256 MB"))
-        try:
-            # 构建列定义
-            columns_def = []
-            for col_name, dtype in df.dtypes.items():
-                dtype_str = str(dtype)
-                if 'datetime' in dtype_str:
-                    sql_type = 'TIMESTAMP'
-                elif 'int' in dtype_str:
-                    sql_type = 'BIGINT'  # 统一使用BIGINT避免溢出
-                elif 'float' in dtype_str:
-                    sql_type = 'DOUBLE'
-                elif 'bool' in dtype_str:
-                    sql_type = 'BOOLEAN'
-                else:
-                    sql_type = 'VARCHAR'
-                columns_def.append(f'"{col_name}" {sql_type}')
-            if primary_key:
-                pk_cols = ', '.join([f'"{c}"' for c in primary_key])
-                columns_def.append(f'PRIMARY KEY ({pk_cols})')
-            create_stmt = f'CREATE TABLE IF NOT EXISTS "{table_name}" ({", ".join(columns_def)})'
-            con.execute(create_stmt)
-            # 注册临时表并插入（忽略主键冲突）
-            con.register('temp_df', df)
-            cols = ', '.join([f'"{c}"' for c in df.columns])
-            insert_stmt = f'INSERT OR IGNORE INTO "{table_name}" ({cols}) SELECT {cols} FROM temp_df'
-            con.execute(insert_stmt)
-        finally:
-            con.close()
-def load_dataframe(sql: str, db: str) -> pd.DataFrame:
-    """
-    执行SQL查询，返回结果DataFrame。
-    """
-    db_path = _get_db_path(db)
-    if not os.path.exists(db_path):
-        return pd.DataFrame()
-    con = duckdb.connect(db_path, read_only=True) # 使用只读模式避免加锁写操作
+
+    db_path = f"dfs://{db}_{freq}"
+    metadata_db_path = f"dfs://{db}_metadata"
     try:
-        df = con.execute(sql).df()
-        return df
-    except Exception as e:
-        # 如果表不存在会报错，返回空 DF
+        cols = df.columns.astype(str).tolist()
+        if not cols:
+            return
+        col_defs = ", ".join([f"`{c}" for c in cols])
+        compress_methods = ", ".join(["`delta" if c == "date" else "`lz4" for c in cols])
+        compress_expr = f"dict([{col_defs}], [{compress_methods}])"
+        types = ", ".join([_dolphindb_type(df[c].dtype) for c in cols])
+        sort_clause = ""
+        if primary_key:
+            sort_clause = f", sortColumns=[{', '.join([f'`{c}' for c in primary_key])}]"
+        lock = _get_lock(db)
+        with lock:
+            s = _connect_dolphindb(db)
+            if not bool(s.run(f'existsDatabase("{metadata_db_path}")')):
+                s.run(f'database("{metadata_db_path}", VALUE, [`meta], , "OLAP")')
+            if not bool(s.run(f'existsTable("{metadata_db_path}",`freq)')):
+                s.run(
+                    f'''
+                    mdb=database("{metadata_db_path}");
+                    mt=table(1:0, [`table, `freq], [STRING, STRING]);
+                    mdb.createTable(mt, `freq);
+                    '''
+                )
+            existing = s.run(
+                f'''
+                select freq from loadTable("{metadata_db_path}",`freq)
+                where table="{table}"
+                '''
+            )
+            if len(existing) > 0:
+                existing_freq = str(existing.iloc[0]["freq"])
+                if existing_freq != freq:
+                    raise ValueError(
+                        f"Table '{table}' already registered with freq '{existing_freq}', got '{freq}'."
+                    )
+            else:
+                s.run(
+                    f'''
+                    ft=loadTable("{metadata_db_path}",`freq);
+                    row=table("{table}" as table, "{freq}" as freq);
+                    append!(ft, row);
+                    '''
+                )
+            if not bool(s.run(f'existsDatabase("{db_path}")')):
+                if freq == "tick":
+                    s.run(
+                        f'''
+                        db1=database("", VALUE, 2000.06.09..2035.06.09);
+                        db2=database("", HASH, [SYMBOL, 25]);
+                        database("{db_path}", COMPO, [db1, db2], engine="TSDB");
+                        '''
+                    )
+                elif freq == "minute":
+                    s.run(f'database("{db_path}", VALUE, 2000.06.09..2035.06.09, engine="TSDB")')
+                elif freq == "day":
+                    s.run(f'database("{db_path}", RANGE, 1970.01M + (0..66) * 12, engine="TSDB")')
+                else:
+                    raise ValueError(f"Unsupported freq: {freq}")
+            if not bool(s.run(f'existsTable("{db_path}",`{table})')):
+                if freq == "tick":
+                    create_sql = f'''
+                    db=database("{db_path}");
+                    schema_t=table(1:0, [{col_defs}], [{types}]);
+                    db.createPartitionedTable(schema_t, `{table}, `date`symbol, compressMethods={compress_expr}{sort_clause}, keepDuplicates=LAST, softDelete=true);
+                    '''
+                    # db.createPartitionedTable(schema_t, `{table}, `date`symbol, compressMethods={compress_expr}{sort_clause}, keepDuplicates=LAST, softDelete=true);
+                elif freq == "minute":
+                    create_sql = f'''
+                    db=database("{db_path}");
+                    schema_t=table(1:0, [{col_defs}], [{types}]);
+                    db.createPartitionedTable(schema_t, `{table}, `date, compressMethods={compress_expr}{sort_clause}, keepDuplicates=LAST, softDelete=true);
+                    '''
+                elif freq == "day":
+                    create_sql = f'''
+                    db=database("{db_path}");
+                    schema_t=table(1:0, [{col_defs}], [{types}]);
+                    db.createPartitionedTable(schema_t, `{table}, `date, compressMethods={compress_expr}{sort_clause}, keepDuplicates=LAST, softDelete=true);
+                    '''
+                else:
+                    raise ValueError(f"Unsupported freq: {freq}")
+                s.run(create_sql)
+            var_name = f"up_{table}"
+            s.upload({var_name: df})
+            if primary_key:
+                pk_expr = "".join([f"`{c}" for c in primary_key])
+                s.run(
+                    f'''
+                    t=loadTable("{db_path}",`{table});
+                    upsert!(t,{var_name},false,{pk_expr});
+                    '''
+                )
+            else:
+                s.run(
+                    f'''
+                    t=loadTable("{db_path}",`{table});
+                    t.append!({var_name});
+                    '''
+                )
+    except:
+        return
+
+
+def load_dataframe(sql: str, db: str):
+    """
+    直接执行 DolphinDB 语句并返回 DataFrame。
+    调用方需传入符合 DolphinDB 语法的查询语句和对应数据库配置名。
+    """
+    if not sql:
         return pd.DataFrame()
-    finally:
-        con.close()
+    try:
+        s = _connect_dolphindb(db)
+        return s.run(sql)
+    except:
+        return pd.DataFrame()
+
+
+def loadTable(field, table: str, db: str, cond: str = "") -> str:
+    if isinstance(field, str):
+        field_expr = field
+    else:
+        field_expr = ", ".join(field)
+    metadata = f"dfs://{db}_metadata"
+    try:
+        freq_df = load_dataframe(
+            f'''
+            select freq from loadTable("{metadata}",`freq)
+            where table="{table}"
+            ''',
+            db,
+        )
+        if freq_df.empty:
+            return None
+    except:
+        return None
+    freq = str(freq_df.iloc[0]["freq"])
+    db_name = f"dfs://{db}_{freq}"
+    return f"select {field_expr} from loadTable('{db_name}','{table}') {cond}"
+
+
+def dropTable(db: str, table: str) -> bool:
+    """删除 DolphinDB 分布式表，不存在时返回 False。"""
+    metadata = f"dfs://{db}_metadata"
+    try:
+        freq_df = load_dataframe(
+            f'''
+            select freq from loadTable("{metadata}",`freq)
+            where table="{table}"
+            ''',
+            db,
+        )
+        if freq_df.empty:
+            return False
+        freq = str(freq_df.iloc[0]["freq"])
+        db_path = f"dfs://{db}_{freq}"
+
+        if not bool(load_dataframe(f'existsTable("{db_path}",`{table})', db)):
+            return False
+        s = _connect_dolphindb(db)
+        s.dropTable(f"{db_path}",f"{table}")
+        return True
+    except:
+        return False

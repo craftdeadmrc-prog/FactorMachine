@@ -5,30 +5,25 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FactorMachine Panel</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <link rel="stylesheet" href="/common/style.css">
-    <!-- 引入 ECharts 用于K线图展示 -->
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/klinecharts@10.0.0-beta1/dist/umd/klinecharts.min.js"></script>
 </head>
 <body>
-    <!-- Sidebar -->
-    <div class="sidebar">
+    <aside class="sidebar">
         <div class="logo">FactorMachine</div>
-        <div class="nav-item active" onclick="switchView('dashboard', this)">首页状态</div>
-        <div class="nav-item" onclick="switchView('tasks', this)">任务执行</div>
-        <div class="nav-item" onclick="switchView('logs', this)">日志查看</div>
-        <div class="nav-item" onclick="switchView('kline', this)">K线查看</div>
-        <div class="nav-item" onclick="alert('功能开发中...')">因子分析</div>
-        <div class="nav-item" onclick="alert('功能开发中...')">策略回测</div>
-        <div class="nav-item" onclick="alert('功能开发中...')">实盘监控</div>
-    </div>
-    <!-- Main Content -->
-    <div class="main-content">
-        <div class="header" id="page-title">首页状态</div>
-        <div class="content-body" id="view-container">
-            <!-- 动态内容区 -->
-        </div>
-    </div>
-    
+        <nav class="nav-list">
+            <div class="nav-item active" onclick="switchView('dashboard', this)">首页状态</div>
+            <div class="nav-item" onclick="switchView('tasks', this)">任务执行</div>
+            <div class="nav-item" onclick="switchView('logs', this)">日志查看</div>
+            <div class="nav-item" onclick="switchView('kline', this)">K线查看</div>
+            <div class="nav-item" onclick="switchView('hft', this)">高频查看</div>
+        </nav>
+    </aside>
+    <main class="main-content">
+        <header class="header" id="page-title">首页状态</header>
+        <section class="content-body" id="view-container"></section>
+    </main>
     <script src="/common/script.js"></script>
 </body>
 </html>

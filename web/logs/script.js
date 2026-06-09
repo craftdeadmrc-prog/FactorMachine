@@ -6,7 +6,7 @@ function init_logs() {
 
 async function loadLogsList() {
     try {
-        const data = await WSAPI.get('/tasks');
+        const data = await WSAPI.call('tasks.get');
         const container = document.getElementById('log-list-container');
         container.innerHTML = '';
         
@@ -14,7 +14,7 @@ async function loadLogsList() {
         Object.values(data).forEach(arr => {
             if (Array.isArray(arr)) {
                 arr.forEach(task => {
-                    if (task && task.name && typeof task.name === 'string') {
+                    if (task && task.name && typeof task.name === 'string' && task.name !== 'Init') {
                         allTasks.push(task);
                     }
                 });
@@ -43,7 +43,7 @@ async function clearLogs(taskName) {
     if(!confirm(`确定要清理任务 [${taskName}] 的所有日志吗？此操作不可恢复。`)) return;
     
     try {
-        const data = await WSAPI.delete('/logs/' + encodeURIComponent(taskName));
+        const data = await WSAPI.call('logs.clear', { task_name: taskName });
         alert('日志清理成功');
         const detail = document.getElementById('log-detail-view');
         if (detail) {
@@ -61,7 +61,7 @@ async function loadLogDetail(taskName, itemElement) {
     detail.classList.add('open');
     detail.innerText = 'Loading...';
     try {
-        const data = await WSAPI.get('/logs/' + encodeURIComponent(taskName));
+        const data = await WSAPI.call('logs.get', { task_name: taskName });
         if (data.logs && Array.isArray(data.logs) && data.logs.length > 0) {
             const text = data.logs.map(log => 
                 `[${log.date}] [${log.level}] ${log.message}`
